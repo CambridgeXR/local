@@ -399,10 +399,23 @@
 
     // ======== Cardboard flow ========
     async function enterCardboard() {
-      const ok = await requestOrientationPermission();
-      if (!ok) { showToast('Motion/Orientation permission denied'); return; }
+      // Request orientation permission right away
+      const permissionGranted = await requestOrientationPermission();
+      if (!permissionGranted) {
+        showToast('Motion/Orientation permission denied');
+        return;
+      }
+
+      // Immediate fullscreen to avoid gesture loss
+      try {
+        const el = document.documentElement;
+        if (el.requestFullscreen) el.requestFullscreen();
+        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+      } catch (e) {
+        console.warn("Fullscreen request failed", e);
+      }
+
       await ensureVideoPlays();
-      await goFullscreen();
       await lockLandscape();
       await requestWakeLock();
 
