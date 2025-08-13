@@ -136,7 +136,7 @@
       try {
         video.muted = false;
         await video.play();
-      } catch (e) { /* a second tap may be needed on some devices */ }
+      } catch (e) {}
     }
 
     // ======== Wake Lock & orientation ========
@@ -167,31 +167,48 @@
       } catch (e) {}
     }
 
-    // ======== DeviceOrientation handling (permissions + tracking) ========
-    let yaw = 0, pitch = 0; // radians
-    let havePermission = false;
-
-    async function requestOrientationPermission() {
-      try {
-        if (typeof DeviceOrientationEvent !== 'undefined' &&
-            typeof DeviceOrientationEvent.requestPermission === 'function') {
-          const resp = await DeviceOrientationEvent.requestPermission();
-          havePermission = (resp === 'granted');
-        } else {
-          // Chrome Android typically doesn't require requestPermission()
-          havePermission = true;
-        }
-      } catch (e) { havePermission = false; }
-      return havePermission;
-    }
-
-    // Simple orientation mapping; good enough for 360 monoscopic viewing
+    // ======== Orientation tracking with fix ========
+    let ori = { alpha: 0, beta: 0, gamma: 0 };
     addEventListener('deviceorientation', (e) => {
       if (e.alpha == null || e.beta == null || e.gamma == null) return;
-      // yaw from alpha (compass-like), pitch from beta (tilt front/back)
-      yaw = (e.alpha || 0) * Math.PI / 180;
-      pitch = ((e.beta || 0) - 90) * Math.PI / 180;
+      ori.alpha = e.alpha * Math.PI / 180;
+      ori.beta = e.beta * Math.PI / 180;
+      ori.gamma = e.gamma * Math.PI / 180;
     });
+
+    function screenAngleRad() {
+      const ang = (screen.orientation && typeof screen.orientation.angle === 'number')
+        ? screen.orientation.angle
+        : (window.orientation || 0);
+      return (ang || 0) * Math.PI / 180;
+    }
+
+    function mat4Identity(){ return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); }
+    function mat4Mul(out, a, b){
+      for(let i=0;i<4;i++){
+        for(let j=0;j<4;j++){
+          out[i+j*4] = a[i]*b[j*4] + a[i+4]*b[j*4+1] + a[i+8]*b[j*4+2] + a[i+12]*b[j*4+3];
+        }
+      }
+      return out;
+    }
+    function mat4Transpose(out, m){
+      for(let i=0;i<4;i++){ for(let j=0;j<4;j++){ out[i*4+j] = m[j*4+i]; } }
+      return out;
+    }
+    function Rx(x){ const c=Math.cos(x), s=Math.sin(x); return new Float32Array([1,0,0,0, 0,c,s,0, 0,-s,c,0, 0,0,0,1]); }
+    function Ry(y){ const c=Math.cos(y), s=Math.sin(y); return new Float32Array([c,0,-s,0, 0,1,0,0, s,0,c,0, 0,0,0,1]); }
+    function Rz(z){ const c=Math.cos(z), s=Math.sin(z); return new Float32Array([c,s,0,0, -s,c,0,0, 0,0,1,0, 0,0,0,1]); }
+
+    const viewFromOrientation = (() => {
+      const tmp1 = mat4Identity(), tmp2 = mat4Identity();
+      return (out, alpha, beta, gamma, scrAng) => {
+        mat4Mul(tmp1, Rz(alpha), Rx(beta));
+        mat4Mul(tmp2, tmp1, Ry(gamma));
+        mat4Mul(tmp1, tmp2, Rz(-scrAng));
+        return mat4Transpose(out, tmp1);
+      };
+    })();
 
     // ======== WebGL setup ========
     const canvas = document.getElementById('glcanvas');
@@ -216,7 +233,6 @@
       uniform mat4 uModel;
       varying vec2 vUV;
       void main() {
-        // Flip X so we view the inside of sphere
         vec4 pos = uModel * vec4(aPosition * vec3(-1.0, 1.0, 1.0), 1.0);
         gl_Position = uProj * uView * pos;
         vUV = vec2(1.0 - aUV.x, aUV.y);
@@ -230,7 +246,7 @@
     `;
     function compileShader(type, src) {
       const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPLETE_STATUS) && !gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
         console.error(gl.getShaderInfoLog(s)); gl.deleteShader(s); return null;
       }
       return s;
@@ -251,7 +267,7 @@
       uTex: gl.getUniformLocation(prog, 'uTex'),
     };
 
-    // Sphere geometry
+    // Sphere geometry (Uint16 indices for compatibility)
     function createSphere(segU=64, segV=64) {
       const verts=[], uvs=[], idx=[];
       for (let y=0; y<=segV; y++) {
@@ -267,7 +283,7 @@
           const i=y*(segU+1)+x; const a=i, b=i+segU+1, c=i+1, d=i+segU+2; idx.push(a,b,c, c,b,d);
         }
       }
-      return {verts:new Float32Array(verts), uvs:new Float32Array(uvs), idx:new Uint32Array(idx)};
+      return {verts:new Float32Array(verts), uvs:new Float32Array(uvs), idx:new Uint16Array(idx)};
     }
     const sphere = createSphere(64,64);
 
@@ -282,12 +298,8 @@
     const ibo = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sphere.idx, gl.STATIC_DRAW);
 
-    // Model matrix (big sphere)
-    function mat4Identity(){ return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); }
-    function mat4Scale(sx,sy,sz){ const m=mat4Identity(); m[0]=sx; m[5]=sy; m[10]=sz; return m; }
-    const modelMatrix = mat4Scale(5000,5000,5000);
+    const modelMatrix = (() => { const m=mat4Identity(); m[0]=m[5]=m[10]=5000; return m; })();
 
-    // Texture from <video>
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -298,17 +310,12 @@
 
     function updateVideoTexture() {
       if (video.readyState >= 2 && !video.paused) {
-        try {
-          gl.bindTexture(gl.TEXTURE_2D, tex);
-          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
-        } catch (e) {
-          try { gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, video); } catch(e2){}
-        }
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
       }
     }
 
-    // Basic math
     function perspective(out, fovy, aspect, near, far){
       const f=1.0/Math.tan(fovy/2), nf=1/(near-far);
       out[0]=f/aspect; out[1]=0; out[2]=0; out[3]=0;
@@ -316,41 +323,8 @@
       out[8]=0; out[9]=0; out[10]=(far+near)*nf; out[11]=-1;
       out[12]=0; out[13]=0; out[14]=2*far*near*nf; out[15]=0; return out;
     }
-    function mat4Invert(out, a) {
-      const m=a, b=new Float32Array(16);
-      b[0]=m[5]*m[10]*m[15]-m[5]*m[11]*m[14]-m[9]*m[6]*m[15]+m[9]*m[7]*m[14]+m[13]*m[6]*m[11]-m[13]*m[7]*m[10];
-      b[4]=-m[4]*m[10]*m[15]+m[4]*m[11]*m[14]+m[8]*m[6]*m[15]-m[8]*m[7]*m[14]-m[12]*m[6]*m[11]+m[12]*m[7]*m[10];
-      b[8]=m[4]*m[9]*m[15]-m[4]*m[11]*m[13]-m[8]*m[5]*m[15]+m[8]*m[7]*m[13]+m[12]*m[5]*m[11]-m[12]*m[7]*m[9];
-      b[12]=-m[4]*m[9]*m[14]+m[4]*m[10]*m[13]+m[8]*m[5]*m[14]-m[8]*m[6]*m[13]-m[12]*m[5]*m[10]+m[12]*m[6]*m[9];
-      b[1]=-m[1]*m[10]*m[15]+m[1]*m[11]*m[14]+m[9]*m[2]*m[15]-m[9]*m[3]*m[14]-m[13]*m[2]*m[11]+m[13]*m[3]*m[10];
-      b[5]=m[0]*m[10]*m[15]-m[0]*m[11]*m[14]-m[8]*m[2]*m[15]+m[8]*m[3]*m[14]+m[12]*m[2]*m[11]-m[12]*m[3]*m[10];
-      b[9]=-m[0]*m[9]*m[15]+m[0]*m[11]*m[13]-m[8]*m[1]*m[15]-m[8]*m[3]*m[13]-m[12]*m[1]*m[11]+m[12]*m[3]*m[9];
-      b[13]=m[0]*m[9]*m[14]-m[0]*m[10]*m[13]-m[8]*m[1]*m[14]+m[8]*m[2]*m[13]+m[12]*m[1]*m[10]-m[12]*m[2]*m[9];
-      b[2]=m[1]*m[6]*m[15]-m[1]*m[7]*m[14]-m[5]*m[2]*m[15]+m[5]*m[3]*m[14]+m[13]*m[2]*m[7]-m[13]*m[3]*m[6];
-      b[6]=-m[0]*m[6]*m[15]+m[0]*m[7]*m[14]+m[4]*m[2]*m[15]-m[4]*m[3]*m[14]-m[12]*m[2]*m[7]+m[12]*m[3]*m[6];
-      b[10]=m[0]*m[5]*m[15]-m[0]*m[7]*m[13]-m[4]*m[1]*m[15]+m[4]*m[3]*m[13]+m[12]*m[1]*m[7]-m[12]*m[3]*m[5];
-      b[14]=-m[0]*m[5]*m[14]+m[0]*m[6]*m[13]+m[4]*m[1]*m[14]-m[4]*m[2]*m[13]-m[12]*m[1]*m[6]+m[12]*m[2]*m[5];
-      b[3]=-m[1]*m[6]*m[11]+m[1]*m[7]*m[10]+m[5]*m[2]*m[11]-m[5]*m[3]*m[10]-m[9]*m[2]*m[7]+m[9]*m[3]*m[6];
-      b[7]=m[0]*m[6]*m[11]-m[0]*m[7]*m[10]-m[4]*m[2]*m[11]+m[4]*m[3]*m[10]+m[8]*m[2]*m[7]-m[8]*m[3]*m[6];
-      b[11]=-m[0]*m[5]*m[11]+m[0]*m[7]*m[9]+m[4]*m[1]*m[11]-m[4]*m[3]*m[9]-m[8]*m[1]*m[7]+m[8]*m[3]*m[5];
-      b[15]=m[0]*m[5]*m[10]-m[0]*m[6]*m[9]-m[4]*m[1]*m[10]+m[4]*m[2]*m[9]+m[8]*m[1]*m[6]-m[8]*m[2]*m[5];
-      let det=m[0]*b[0]+m[1]*b[4]+m[2]*b[8]+m[3]*b[12]; if(!det){ out.set(mat4Identity()); return out; }
-      det=1.0/det; for(let i=0;i<16;i++) out[i]=b[i]*det; return out;
-    }
-    function mat4FromYawPitch(out, yaw, pitch){
-      const cy=Math.cos(yaw), sy=Math.sin(yaw);
-      const cp=Math.cos(pitch), sp=Math.sin(pitch);
-      // R = Ry * Rx (world->camera inverse later)
-      const m = new Float32Array([
-         cy,  sy*sp,  sy*cp, 0,
-          0,     cp,    -sp, 0,
-        -sy,  cy*sp,  cy*cp, 0,
-          0,      0,      0, 1
-      ]);
-      return mat4Invert(out, m);
-    }
 
-    // ======== Render loop (mono + Cardboard SBS) ========
+    // ======== Render loop ========
     let cardboard = false;
     const proj = new Float32Array(16);
     const view = new Float32Array(16);
@@ -359,39 +333,32 @@
       resizeCanvas();
       gl.clearColor(0,0,0,1);
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      gl.disable(gl.CULL_FACE); gl.disable(gl.DEPTH_TEST);
       updateVideoTexture();
       gl.useProgram(prog);
-      gl.uniform1i(loc.uTex, 0);
       gl.uniformMatrix4fv(loc.uModel, false, modelMatrix);
 
+      viewFromOrientation(view, ori.alpha, ori.beta, ori.gamma, screenAngleRad());
+
       if (cardboard) {
-        // Side-by-side viewports
         const w = canvas.width, h = canvas.height;
         const halfW = (w/2)|0;
-        // Typical mobile FOV ~ 90°; adjust if needed
-        perspective(proj, Math.PI/2.0, halfW/h, 0.1, 10000.0);
+        perspective(proj, Math.PI/2.2, halfW/h, 0.1, 10000.0);
 
-        // Left eye
         gl.viewport(0, 0, halfW, h);
-        mat4FromYawPitch(view, yaw, pitch);
         gl.uniformMatrix4fv(loc.uProj, false, proj);
         gl.uniformMatrix4fv(loc.uView, false, view);
-        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_INT, 0);
+        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_SHORT, 0);
 
-        // Right eye (same mono content — monoscopic video)
         gl.viewport(halfW, 0, halfW, h);
         gl.uniformMatrix4fv(loc.uProj, false, proj);
         gl.uniformMatrix4fv(loc.uView, false, view);
-        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_INT, 0);
+        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_SHORT, 0);
       } else {
-        // Single-eye preview
-        perspective(proj, Math.PI/2.0, canvas.width/canvas.height, 0.1, 10000.0);
-        mat4FromYawPitch(view, yaw, pitch);
+        perspective(proj, Math.PI/2.2, canvas.width/canvas.height, 0.1, 10000.0);
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.uniformMatrix4fv(loc.uProj, false, proj);
         gl.uniformMatrix4fv(loc.uView, false, view);
-        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_INT, 0);
+        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_SHORT, 0);
       }
       requestAnimationFrame(render);
     }
@@ -399,52 +366,23 @@
 
     // ======== Cardboard flow ========
     async function enterCardboard() {
-      // Request orientation permission right away
-      const permissionGranted = await requestOrientationPermission();
-      if (!permissionGranted) {
-        showToast('Motion/Orientation permission denied');
-        return;
+      if (typeof DeviceOrientationEvent !== 'undefined' &&
+          typeof DeviceOrientationEvent.requestPermission === 'function') {
+        const resp = await DeviceOrientationEvent.requestPermission();
+        if (resp !== 'granted') { showToast('Motion permission denied'); return; }
       }
-
-      // Immediate fullscreen to avoid gesture loss
-      try {
-        const el = document.documentElement;
-        if (el.requestFullscreen) el.requestFullscreen();
-        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-      } catch (e) {
-        console.warn("Fullscreen request failed", e);
-      }
-
       await ensureVideoPlays();
       await lockLandscape();
       await requestWakeLock();
-
       brand.classList.add('hidden');
-      await new Promise((resolve) => {
-        const done = () => { ui.classList.add('hidden'); ui.removeEventListener('transitionend', done); resolve(); };
-        ui.classList.add('fade');
-        if (getComputedStyle(ui).transitionDuration !== '0s') {
-          ui.addEventListener('transitionend', done, {once:true});
-        } else { done(); }
-      });
-
+      ui.classList.add('fade');
       cardboard = true;
       showToast('Cardboard mode');
     }
 
-    cardboardBtn.addEventListener('click', () => {
-      enterCardboard().catch(err => {
-        console.error(err);
-        cardboard = false;
-        ui.classList.remove('hidden');
-        brand.classList.remove('hidden');
-        showToast('Could not enter Cardboard mode');
-      });
-    });
+    cardboardBtn.addEventListener('click', () => enterCardboard());
 
-    // Start preview & UI fade
-    requestAnimationFrame(() => { scheduleUIHide(); });
-
+    scheduleUIHide();
   })();
   </script>
 </body>
