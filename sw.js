@@ -1,7 +1,11 @@
-const CACHE_NAME = '360-vr-player-cache-v1';
+const CACHE_NAME = '360-vr-player-cache-v2';
 const FILES_TO_CACHE = [
   './',
-  './index.html'
+  './index.html',
+  './manifest.json',
+  './icons/icon-192.png',
+  './icons/icon-512.png'
+  // Add any other JS/CSS/images if they exist
 ];
 
 self.addEventListener('install', event => {
@@ -30,6 +34,7 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   event.respondWith(
     caches.match(event.request).then(response => {
+      // Return cached file if it exists, otherwise fetch from network
       return response || fetch(event.request);
     })
   );
