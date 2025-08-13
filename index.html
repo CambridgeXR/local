@@ -1,45 +1,28 @@
-<!doctype html>
+<!DOCTYPE html>
+
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>360 VR Player (Cambridge XR)</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
-  <meta name="theme-color" content="#000000"/>
-
-  <!-- PWA Manifest (optional) -->
-  <link rel="manifest" href="manifest.json">
-
-  <!-- Icons (optional) -->
-  <link rel="icon" sizes="192x192" href="icons/icon-192.png">
-  <link rel="apple-touch-icon" sizes="192x192" href="icons/icon-192.png">
-  <link rel="apple-touch-icon" sizes="512x512" href="icons/icon-512.png">
-
-  <!-- Service Worker Registration (optional) -->
-  <script>
-    if ('serviceWorker' in navigator) {
-      addEventListener('load', () => {
-        navigator.serviceWorker.register('sw.js')
-          .then(reg => console.log('SW registered', reg.scope))
-          .catch(err => console.error('SW registration failed', err));
-      });
-    }
-  </script>
-
-  <style>
+<meta charset="utf-8"/>
+<title>360 VR Player (Cambridge XR)</title>
+<meta content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" name="viewport"/>
+<meta content="#000000" name="theme-color"/>
+<meta content="Lightweight 360° VR video player for mobile (Cardboard-style)." name="description"/>
+<link href="manifest.json" rel="manifest"/>
+<link href="icons/icon-192.png" rel="icon" sizes="192x192"/>
+<link href="icons/icon-192.png" rel="apple-touch-icon" sizes="192x192"/>
+<link href="icons/icon-512.png" rel="apple-touch-icon" sizes="512x512"/>
+<style>
     :root { --ui-fade-ms: 4000; }
     html, body { margin:0; padding:0; height:100%; background:#000; color:#fff;
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
       overscroll-behavior: contain; touch-action: manipulation; }
     canvas { display:block; width:100vw; height:100vh; }
 
-    /* Floating UI (panel + footer share fade/hidden states) */
     #ui { position:fixed; inset:0; pointer-events:none; }
     #panelWrap { position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; }
-    .panel { pointer-events:auto; display:grid; gap:12px; width:min(92vw,520px); text-align:center;
-      transition:opacity .35s ease; }
+    .panel { pointer-events:auto; display:grid; gap:12px; width:min(92vw,520px); text-align:center; transition:opacity .35s ease; }
     #footer { position:fixed; left:50%; bottom:10px; transform:translateX(-50%);
-      font-size:.8rem; font-style:italic; opacity:.85; transition:opacity .35s ease;
-      pointer-events:none; user-select:none; }
+      font-size:.8rem; font-style:italic; opacity:.85; transition:opacity .35s ease; pointer-events:none; user-select:none; }
     .faded { opacity:0; }
     .hidden { display:none; }
 
@@ -50,79 +33,62 @@
     .btn[disabled]{ opacity:.5; cursor:not-allowed; }
     input[type=file]{ display:none; }
 
+    .row { display:flex; gap:10px; }
+    .row > .btn { flex:1; }
+
     #toast { position:fixed; bottom:56px; left:50%; transform:translateX(-50%);
       background:rgba(0,0,0,.65); color:#fff; font-size:.95rem; padding:10px 12px; border-radius:10px;
       opacity:0; transition:opacity .25s ease; pointer-events:none; }
     #toast.show { opacity:1; }
 
-    @media (prefers-reduced-motion: reduce) {
-      .panel, #footer, #toast { transition:none; }
-    }
+    #status { font-size:.9rem; opacity:.9; }
+    #status .dot { display:inline-block; width:.6rem; height:.6rem; border-radius:50%; margin-right:.4rem; background:#777; }
+    #status .ok .dot { background:#1ec362; }
+    #status .warn .dot { background:#ffaa2c; }
+    #status .err .dot { background:#ff4747; }
+    @media (prefers-reduced-motion: reduce) { .panel, #footer, #toast { transition:none; } }
   </style>
 </head>
 <body>
-
-  <!-- Rendering surface -->
-  <canvas id="glcanvas" aria-label="360 VR Canvas"></canvas>
-
-  <!-- Hidden <video> used as the texture -->
-  <video id="video360" playsinline webkit-playsinline preload="metadata" loop crossorigin="anonymous" style="display:none"></video>
-
-  <!-- Minimal floating UI -->
-  <div id="ui" aria-live="polite">
-    <div id="panelWrap">
-      <div id="panel" class="panel">
-        <button id="selectBtn" class="btn secondary" type="button">Select simulation</button>
-        <input id="fileInput" type="file" accept="video/*" />
-        <button id="vrBtn" class="btn" type="button" disabled>Enter VR</button>
-      </div>
-    </div>
-    <div id="footer">Brought to you by Cambridge XR</div>
-  </div>
-
-  <div id="toast" role="status" aria-live="polite"></div>
-
-  <script>
+<canvas aria-label="360 VR Canvas" id="glcanvas"></canvas>
+<video crossorigin="anonymous" id="video360" loop="" playsinline="" preload="metadata" style="display:none" webkit-playsinline=""></video>
+<div aria-live="polite" id="ui">
+<div id="panelWrap">
+<div class="panel" id="panel"><h1 id="title" style="margin:0;font-size:1.4rem;font-weight:700;letter-spacing:.2px;">360° VR Player</h1><div id="status"><span class="dot"></span><span id="statusText">Motion: idle</span></div><div class="row">
+<button class="btn secondary" id="selectBtn" type="button">Select simulation</button>
+<input accept="video/*" id="fileInput" type="file"/>
+<button class="btn secondary" id="recenterBtn" type="button">Recenter</button>
+</div><button class="btn" disabled="" id="vrBtn" type="button">Enter VR</button></div>
+</div>
+<div id="footer">Brought to you by Cambridge XR</div>
+</div>
+<div aria-live="polite" id="toast" role="status"></div>
+<script>
   (() => {
-    // ======== UI helpers ========
-    const ui = document.getElementById('ui');
-    const panel = document.getElementById('panel');
-    const footer = document.getElementById('footer');
-    const toast = document.getElementById('toast');
-    let hideUITimer = null;
-    const UI_HIDE_DELAY = 4000;
-
-    function showToast(msg, ms = 1800) {
-      toast.textContent = msg;
-      toast.classList.add('show');
-      clearTimeout(showToast._t);
-      showToast._t = setTimeout(() => toast.classList.remove('show'), ms);
+    // ============ UI helpers ============
+    const qs = (s)=>document.querySelector(s);
+    const ui = qs('#ui'), panel = qs('#panel'), footer = qs('#footer'), toast = qs('#toast');
+    const statusEl = qs('#status'); const statusText = qs('#statusText');
+    let hideUITimer = null; const UI_HIDE_DELAY = 4000;
+    function setStatus(kind, text){
+      statusEl.classList.remove('ok','warn','err');
+      if (kind) statusEl.classList.add(kind);
+      statusText.textContent = text;
     }
-    function fadeUI() {
-      panel.classList.add('faded');
-      footer.classList.add('faded');
+    function showToast(msg, ms = 1800){
+      toast.textContent = msg; toast.classList.add('show');
+      clearTimeout(showToast._t); showToast._t = setTimeout(() => toast.classList.remove('show'), ms);
     }
-    function showUI() {
-      clearTimeout(hideUITimer);
-      panel.classList.remove('faded');
-      footer.classList.remove('faded');
-      hideUITimer = setTimeout(fadeUI, UI_HIDE_DELAY);
-    }
-    // Show UI initially, then fade
+    function fadeUI(){ panel.classList.add('faded'); footer.classList.add('faded'); }
+    function showUI(){ clearTimeout(hideUITimer); panel.classList.remove('faded'); footer.classList.remove('faded'); hideUITimer = setTimeout(fadeUI, UI_HIDE_DELAY); }
     showUI();
-    addEventListener('pointerdown', () => {
-      showUI();
-      // If we're already in VR, a single tap anywhere recenters
-      if (vrActive) requestRecenter();
-    }, {passive:true});
+    addEventListener('pointerdown', () => { showUI(); if (vrActive) requestRecenter(); }, {passive:true});
 
-    // ======== Video / file handling ========
-    const fileInput = document.getElementById('fileInput');
-    const selectBtn = document.getElementById('selectBtn');
-    const vrBtn = document.getElementById('vrBtn');
-    const video = document.getElementById('video360');
+    // ============ Video handling ============
+    const fileInput = qs('#fileInput'), selectBtn = qs('#selectBtn'), vrBtn = qs('#vrBtn');
+    const recenterBtn = qs('#recenterBtn');
+    const video = qs('#video360');
     let objectURL = null;
-
     selectBtn.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', async (ev) => {
       const file = ev.target.files && ev.target.files[0];
@@ -130,46 +96,26 @@
       try {
         if (objectURL) URL.revokeObjectURL(objectURL);
         objectURL = URL.createObjectURL(file);
-        video.src = objectURL;
-        video.loop = true;
-        video.playsInline = true;
-        video.setAttribute('playsinline', '');
-        video.setAttribute('webkit-playsinline', '');
+        video.src = objectURL; video.loop = true; video.playsInline = true;
+        video.setAttribute('playsinline',''); video.setAttribute('webkit-playsinline','');
         await ensureVideoPlays();
         vrBtn.disabled = false;
         showToast('Simulation loaded.');
         showUI();
-      } catch (err) {
-        console.error(err);
-        showToast('Could not load video.');
-      }
+      } catch (err) { console.error(err); showToast('Could not load video.'); }
     });
+    async function ensureVideoPlays(){ try { video.muted = false; await video.play(); } catch (e) {} }
 
-    async function ensureVideoPlays() {
-      try { video.muted = false; await video.play(); }
-      catch (e) { /* a second tap may be needed on some devices */ }
-    }
-
-    // ======== Power/orientation helpers ========
+    // ============ Power / orientation helpers ============
     let wakeLock = null;
-    async function requestWakeLock() {
-      try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }
-      catch (e) {}
-    }
+    async function requestWakeLock(){ try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){} }
     document.addEventListener('visibilitychange', async () => {
       if (wakeLock !== null && document.visibilityState === 'visible') {
         try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
       }
     });
-
-    async function lockLandscape() {
-      try {
-        if (screen.orientation && screen.orientation.lock) {
-          await screen.orientation.lock('landscape');
-        }
-      } catch(e) {}
-    }
-    async function goFullscreen() {
+    async function lockLandscape(){ try { if (screen.orientation?.lock) await screen.orientation.lock('landscape'); } catch(e){} }
+    async function goFullscreen(){
       try {
         const el = document.documentElement;
         if (el.requestFullscreen) await el.requestFullscreen();
@@ -177,195 +123,165 @@
       } catch (e) {}
     }
 
-    // ======== Sensor Fusion (Gyro + Gravity), Quaternion-based ========
-    // We purposely IGNORE compass heading to avoid magnetic flips.
-
-    // --- Quaternion helpers ---
-    function qIdentity(){ return new Float32Array([0,0,0,1]); }                 // [x,y,z,w]
+    // ============ Math utils (Quat) ============
+    function qIdentity(){ return new Float32Array([0,0,0,1]); }
     function qNormalize(q){ const s=1/Math.hypot(q[0],q[1],q[2],q[3]); q[0]*=s;q[1]*=s;q[2]*=s;q[3]*=s; return q; }
     function qMul(a,b){
-      const ax=a[0], ay=a[1], az=a[2], aw=a[3];
-      const bx=b[0], by=b[1], bz=b[2], bw=b[3];
-      return new Float32Array([
-        aw*bx + ax*bw + ay*bz - az*by,
-        aw*by - ax*bz + ay*bw + az*bx,
-        aw*bz + ax*by - ay*bx + az*bw,
-        aw*bw - ax*bx - ay*by - az*bz
-      ]);
+      const ax=a[0],ay=a[1],az=a[2],aw=a[3]; const bx=b[0],by=b[1],bz=b[2],bw=b[3];
+      return new Float32Array([ aw*bx + ax*bw + ay*bz - az*by, aw*by - ax*bz + ay*bw + az*bx, aw*bz + ax*by - ay*bx + az*bw, aw*bw - ax*bx - ay*by - az*bz ]);
     }
-    function qFromAxisAngle(x,y,z,angle){
-      const h=angle*0.5, s=Math.sin(h);
-      return new Float32Array([x*s, y*s, z*s, Math.cos(h)]);
+    function qFromAxisAngle(x,y,z,angle){ const h=angle*0.5,s=Math.sin(h); return new Float32Array([x*s,y*s,z*s,Math.cos(h)]); }
+    function qRotateVector(q,v){ const x=v[0],y=v[1],z=v[2]; const qx=q[0],qy=q[1],qz=q[2],qw=q[3];
+      const tx=2*(qy*z - qz*y), ty=2*(qz*x - qx*z), tz=2*(qx*y - qy*x);
+      return new Float32Array([ x + qw*tx + (qy*tz - qz*ty), y + qw*ty + (qz*tx - qx*tz), z + qw*tz + (qx*ty - qy*tx) ]);
     }
-    function qSlerp(a,b,t){
-      // Safe slerp
-      let ax=a[0], ay=a[1], az=a[2], aw=a[3];
-      let bx=b[0], by=b[1], bz=b[2], bw=b[3];
-      let cos = ax*bx + ay*by + az*bz + aw*bw;
-      if (cos < 0) { bx=-bx; by=-by; bz=-bz; bw=-bw; cos=-cos; }
-      if (cos > 0.9995) {
-        // linear fallback
-        const out = new Float32Array([ax+(bx-ax)*t, ay+(by-ay)*t, az+(bz-az)*t, aw+(bw-aw)*t]);
-        return qNormalize(out);
-      }
-      const theta = Math.acos(cos), s = Math.sin(theta);
-      const w1 = Math.sin((1-t)*theta)/s, w2 = Math.sin(t*theta)/s;
-      return new Float32Array([ax*w1+bx*w2, ay*w1+by*w2, az*w1+bz*w2, aw*w1+bw*w2]);
-    }
-    function qRotateVector(q, v){ // returns q * [v,0] * q^-1
-      const x=v[0], y=v[1], z=v[2];
-      const qx=q[0], qy=q[1], qz=q[2], qw=q[3];
-      // t = 2 * cross(q.xyz, v)
-      const tx = 2*(qy*z - qz*y);
-      const ty = 2*(qz*x - qx*z);
-      const tz = 2*(qx*y - qy*x);
-      // v' = v + qw*t + cross(q.xyz, t)
-      return new Float32Array([
-        x + qw*tx + (qy*tz - qz*ty),
-        y + qw*ty + (qz*tx - qx*tz),
-        z + qw*tz + (qx*ty - qy*tx)
-      ]);
-    }
-    function qToMat4(q){
-      const x=q[0], y=q[1], z=q[2], w=q[3];
-      const x2=x+x, y2=y+y, z2=z+z;
-      const xx=x*x2, xy=x*y2, xz=x*z2;
-      const yy=y*y2, yz=y*z2, zz=z*z2;
-      const wx=w*x2, wy=w*y2, wz=w*z2;
-      // Column-major 4x4 rotation
-      return new Float32Array([
-        1-(yy+zz), xy+wz,     xz-wy,     0,
-        xy-wz,     1-(xx+zz), yz+wx,     0,
-        xz+wy,     yz-wx,     1-(xx+yy), 0,
-        0,         0,         0,         1
-      ]);
+    function qToMat4(q){ const x=q[0],y=q[1],z=q[2],w=q[3]; const x2=x+x,y2=y+y,z2=z+z; const xx=x*x2,xy=x*y2,xz=x*z2; const yy=y*y2,yz=y*z2,zz=z*z2; const wx=w*x2,wy=w*y2,wz=w*z2;
+      return new Float32Array([ 1-(yy+zz), xy+wz, xz-wy, 0, xy-wz, 1-(xx+zz), yz+wx, 0, xz+wy, yz-wx, 1-(xx+yy), 0, 0,0,0,1 ]);
     }
 
-    // Gyro integration orientation
-    let qOrient = qIdentity();          // device orientation (gyro integrated)
-    let qScreen = qIdentity();          // compensates screen orientation (landscape etc.)
-    let yawOffset = 0;                  // recenter offset around global up (Y)
+    // ============ Orientation state ============
+    let qOrient = qIdentity();    // base device orientation
+    let qScreen = qIdentity();    // compensates screen orientation
+    let yawOffset = 0;            // recenter offset around global up (Y)
+    let vrActive = false;
 
-    // gravity correction parameters
-    const GRAVITY_BLEND = 0.02;         // small long-term correction per frame
-    const MIN_G = 7.0, MAX_G = 13.0;    // accept gravity magnitude window (m/s^2)
-
-    // track last timestamp for integration
-    let lastGyroTs = null;
-
-    // update qScreen whenever screen orientation changes
     function computeQScreen(){
-      const angle = (screen.orientation && typeof screen.orientation.angle === 'number')
-        ? screen.orientation.angle : window.orientation || 0;
+      const angle = (screen.orientation && typeof screen.orientation.angle === 'number') ? screen.orientation.angle : window.orientation || 0;
       const rad = (angle||0) * Math.PI/180;
-      // Map device coordinates (x-right, y-up, z-out-of-screen) to our world camera coords (OpenGL-style)
-      // Start with: rotate about Z by -angle to neutralize screen rotation
       const qA = qFromAxisAngle(0,0,1,-rad);
-      // Then rotate so that when phone is in landscape, its -Z faces forward and +Y is up.
-      // Empirically, a -90° rotation about X aligns device Y-up to world Z-forward; then -90° about Z for landscape.
-      // We'll use a fixed -90° about X to point device Z toward forward when held upright.
       const qB = qFromAxisAngle(1,0,0, -Math.PI/2);
       qScreen = qMul(qA, qB);
     }
     computeQScreen();
     addEventListener('orientationchange', computeQScreen);
-    if (screen.orientation) screen.orientation.addEventListener('change', computeQScreen);
+    screen.orientation?.addEventListener('change', computeQScreen);
 
-    // Recenter: store a yaw offset that rotates current forward to world -Z
     function requestRecenter(){
-      // Current forward vector in world space
+      // Button bound below
       const qWorld = qMul(qScreen, qOrient);
-      const fwd = qRotateVector(qWorld, [0,0,-1]); // camera looks -Z
-      // Project onto XZ plane to get yaw
-      const yaw = Math.atan2(fwd[0], -fwd[2]); // +x => left, -z forward
-      yawOffset = -yaw; // rotate by -yaw to face forward
+      const fwd = qRotateVector(qWorld, [0,0,-1]);
+      const yaw = Math.atan2(fwd[0], -fwd[2]);
+      yawOffset = -yaw;
       showToast('Recentered');
     }
 
-    // Optional: initial small yaw alignment using deviceorientationabsolute (single sample)
-    let absoluteAligned = false;
-    addEventListener('deviceorientationabsolute', (e) => {
-      if (absoluteAligned || e.absolute !== true) return;
-      // only use once, and only to help initial heading — but we still ignore it later
-      absoluteAligned = true;
-      // Just do an initial recenter shortly after VR enters; handled below via setTimeout
-    }, {once:true});
+    // ============ Sensor plumbing ============
+    let sensorMode = 'idle'; // 'generic' | 'devicemotion'
+    let haveStream = false;
 
-    // DeviceMotion: integrate gyro; correct with gravity
-    let haveGyro = false, haveAccel = false;
-    addEventListener('devicemotion', (e) => {
-      // rotationRate in deg/s: alpha(z), beta(x), gamma(y)
-      const rr = e.rotationRate;
-      const ts = e.timeStamp; // ms
-      if (!rr || ts == null) return;
-      let dt = 0;
-      if (lastGyroTs != null) dt = Math.max(0, (ts - lastGyroTs) / 1000);
-      lastGyroTs = ts;
+    async function requestIOSPermissionIfNeeded(){
+      try {
+        if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+          const res = await DeviceMotionEvent.requestPermission(); return res === 'granted';
+        }
+      } catch(e){}
+      return true;
+    }
 
-      // Integrate gyro only if dt > 0
-      if (dt > 0) {
-        haveGyro = true;
-        const wx = (rr.beta || 0) * Math.PI/180;  // x rad/s
-        const wy = (rr.gamma || 0) * Math.PI/180; // y rad/s
-        const wz = (rr.alpha || 0) * Math.PI/180; // z rad/s
-        const mag = Math.hypot(wx, wy, wz);
-        if (mag > 0) {
-          const dq = qFromAxisAngle(wx/mag, wy/mag, wz/mag, mag*dt);
-          qOrient = qNormalize(qMul(qOrient, dq));
+    let genericSensor = null;
+    function stopSensors(){
+      try { if (genericSensor) { genericSensor.stop(); genericSensor = null; } } catch(e){}
+      window.removeEventListener('devicemotion', devicemotionHandler, {passive:true});
+      sensorMode = 'idle'; haveStream = false;
+      setStatus(null, 'Motion: idle');
+    }
+
+    function startGenericSensor(){
+      if (!('AbsoluteOrientationSensor' in window)) return false;
+      try {
+        const sensor = new AbsoluteOrientationSensor({ frequency: 60, referenceFrame: 'device' });
+        sensor.addEventListener('error', ev => {
+          console.warn('AbsoluteOrientationSensor error', ev.error?.name, ev.error);
+          setStatus('warn', 'Motion: blocked by settings');
+        });
+        sensor.addEventListener('reading', () => {
+          // sensor.quaternion is [x,y,z,w] in device frame; we'll use it directly
+          const q = sensor.quaternion;
+          if (q) { qOrient = qNormalize(new Float32Array([q[0],q[1],q[2],q[3]])); haveStream = true; }
+        });
+        sensor.start();
+        genericSensor = sensor;
+        sensorMode = 'generic';
+        setStatus('ok', 'Motion: active (OrientationSensor)');
+        return true;
+      } catch (e) {
+        console.warn('AbsoluteOrientationSensor not available', e);
+        return false;
+      }
+    }
+
+    let lastGyroTs = null; const GRAVITY_BLEND = 0.02; const MIN_G = 7.0, MAX_G = 13.0;
+    function devicemotionHandler(e){
+      const rr = e.rotationRate; const ts = e.timeStamp;
+      if (rr && ts != null){
+        let dt = 0; if (lastGyroTs != null) dt = Math.max(0, (ts - lastGyroTs) / 1000); lastGyroTs = ts;
+        if (dt > 0){
+          const wx=(rr.beta||0)*Math.PI/180, wy=(rr.gamma||0)*Math.PI/180, wz=(rr.alpha||0)*Math.PI/180;
+          const mag = Math.hypot(wx,wy,wz);
+          if (mag > 0){ const dq = qFromAxisAngle(wx/mag, wy/mag, wz/mag, mag*dt); qOrient = qNormalize(qMul(qOrient, dq)); haveStream = true; }
         }
       }
-
-      // Gravity correction (long-term drift fix for roll/pitch)
       const g = e.accelerationIncludingGravity;
-      if (g) {
-        const gx=g.x||0, gy=g.y||0, gz=g.z||0;
-        const gm = Math.hypot(gx,gy,gz);
-        if (gm > MIN_G && gm < MAX_G) {
-          haveAccel = true;
-          // gravity in device coords -> world via qScreen
-          const gDev = [gx,gy,gz];
-          const gWorld = qRotateVector(qScreen, gDev);
-          // current up vector from orientation
+      if (g){
+        const gx=g.x||0, gy=g.y||0, gz=g.z||0; const gm = Math.hypot(gx,gy,gz);
+        if (gm > MIN_G && gm < MAX_G){
+          const gWorld = qRotateVector(qScreen, [gx,gy,gz]);
           const qWorld = qMul(qScreen, qOrient);
-          const up = qRotateVector(qWorld, [0,1,0]);   // world up from current view
-          // desired up should align with -gWorld direction
+          const up = qRotateVector(qWorld, [0,1,0]);
           const targetUp = new Float32Array([-gWorld[0]/gm, -gWorld[1]/gm, -gWorld[2]/gm]);
-
-          // rotation from current up to targetUp
-          const crossX = up[1]*targetUp[2] - up[2]*targetUp[1];
-          const crossY = up[2]*targetUp[0] - up[0]*targetUp[2];
-          const crossZ = up[0]*targetUp[1] - up[1]*targetUp[0];
+          const cx = up[1]*targetUp[2] - up[2]*targetUp[1];
+          const cy = up[2]*targetUp[0] - up[0]*targetUp[2];
+          const cz = up[0]*targetUp[1] - up[1]*targetUp[0];
           const dot = Math.max(-1, Math.min(1, up[0]*targetUp[0] + up[1]*targetUp[1] + up[2]*targetUp[2]));
           const angle = Math.acos(dot);
-          if (angle > 1e-4) {
-            const axisMag = Math.hypot(crossX, crossY, crossZ) || 1;
-            const axis = [crossX/axisMag, crossY/axisMag, crossZ/axisMag];
+          if (angle > 1e-4){
+            const axisMag = Math.hypot(cx,cy,cz) || 1;
+            const axis = [cx/axisMag, cy/axisMag, cz/axisMag];
             const qCorr = qFromAxisAngle(axis[0], axis[1], axis[2], angle * GRAVITY_BLEND);
-            // Apply small correction in world space: qOrient = qScreen^-1 * qCorr * qScreen * qOrient
-            // Since qScreen is fixed, pre/post multiply around orientation
-            // Compute qIn = qScreen * qOrient, want qOut = qCorr * qIn => qOrient' = qScreen^-1 * qOut
-            // For small step, approximate by applying in device frame:
             qOrient = qNormalize(qMul(qCorr, qOrient));
           }
         }
       }
-    }, {passive:true});
+    }
 
-    // ======== WebGL setup ========
+    async function startSensors(){
+      stopSensors();
+      setStatus(null, 'Motion: starting...');
+      const iosOk = await requestIOSPermissionIfNeeded();
+      if (!iosOk){ setStatus('err', 'Motion: permission denied'); return; }
+
+      // Try Generic Sensor API first (reliable on Android Chrome PWAs)
+      const okGeneric = startGenericSensor();
+      if (okGeneric){ return; }
+
+      // Fallback: DeviceMotion
+      window.addEventListener('devicemotion', devicemotionHandler, {passive:true});
+      sensorMode = 'devicemotion';
+      setStatus('ok', 'Motion: active (DeviceMotion)');
+      // If no data arrives in 2s, warn user about site setting
+      setTimeout(() => {
+        if (!haveStream) setStatus('warn', 'Motion: no data (check Chrome > Site settings > Motion sensors)');
+      }, 2000);
+    }
+
+    
+    const recenterBtn = document.getElementById('recenterBtn');
+    recenterBtn.addEventListener('click', () => { requestRecenter(); showUI(); });
+
+    // ============ WebGL setup ============
     const canvas = document.getElementById('glcanvas');
     let gl = canvas.getContext('webgl2', {alpha:false, antialias:true});
-    if (!gl) gl = canvas.getContext('webgl', {alpha:false, antialias:true});
+    let isWebGL2 = !!gl;
+    if (!gl) { gl = canvas.getContext('webgl', {alpha:false, antialias:true}); isWebGL2 = false; }
 
-    function resizeCanvas() {
+    function resizeCanvas(){
       const dpr = Math.max(1, Math.min(2, devicePixelRatio || 1));
       const w = Math.floor(innerWidth * dpr), h = Math.floor(innerHeight * dpr);
       if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
       gl.viewport(0, 0, canvas.width, canvas.height);
     }
-    addEventListener('resize', resizeCanvas);
-    resizeCanvas();
+    addEventListener('resize', resizeCanvas); resizeCanvas();
 
-    // Shaders
     const vsSrc = `
       attribute vec3 aPosition;
       attribute vec2 aUV;
@@ -374,28 +290,24 @@
       uniform mat4 uModel;
       varying vec2 vUV;
       void main() {
-        // Flip X so we view the inside of sphere
         vec4 pos = uModel * vec4(aPosition * vec3(-1.0, 1.0, 1.0), 1.0);
         gl_Position = uProj * uView * pos;
         vUV = vec2(1.0 - aUV.x, aUV.y);
-      }
-    `;
+      }`;
     const fsSrc = `
       precision mediump float;
       varying vec2 vUV;
       uniform sampler2D uTex;
-      void main() { gl_FragColor = texture2D(uTex, vUV); }
-    `;
-    function compileShader(type, src) {
+      void main(){ gl_FragColor = texture2D(uTex, vUV); }`;
+
+    function compileShader(type, src){
       const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
-        console.error(gl.getShaderInfoLog(s)); gl.deleteShader(s); return null;
-      }
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)){ console.error(gl.getShaderInfoLog(s)); gl.deleteShader(s); return null; }
       return s;
     }
-    function createProgram(vs, fs) {
+    function createProgram(vs, fs){
       const p = gl.createProgram(); gl.attachShader(p, vs); gl.attachShader(p, fs); gl.linkProgram(p);
-      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(p)); return null; }
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)){ console.error(gl.getProgramInfoLog(p)); return null; }
       return p;
     }
     const prog = createProgram(compileShader(gl.VERTEX_SHADER, vsSrc), compileShader(gl.FRAGMENT_SHADER, fsSrc));
@@ -409,23 +321,25 @@
       uTex: gl.getUniformLocation(prog, 'uTex'),
     };
 
-    // Sphere geometry
-    function createSphere(segU=64, segV=64) {
+    function createSphere(segU=64, segV=64){
       const verts=[], uvs=[], idx=[];
-      for (let y=0; y<=segV; y++) {
-        const v = y/segV; const phi = v*Math.PI;
-        for (let x=0; x<=segU; x++) {
-          const u = x/segU; const theta = u*Math.PI*2.0;
+      for (let y=0; y<=segV; y++){
+        const v=y/segV; const phi=v*Math.PI;
+        for (let x=0; x<=segU; x++){
+          const u=x/segU; const theta=u*Math.PI*2.0;
           const sx=Math.sin(phi)*Math.cos(theta), sy=Math.cos(phi), sz=Math.sin(phi)*Math.sin(theta);
-          verts.push(sx, sy, sz); uvs.push(u, v);
+          verts.push(sx,sy,sz); uvs.push(u,v);
         }
       }
-      for (let y=0; y<segV; y++) {
-        for (let x=0; x<segU; x++) {
+      for (let y=0; y<segV; y++){
+        for (let x=0; x<segU; x++){
           const i=y*(segU+1)+x; const a=i, b=i+segU+1, c=i+1, d=i+segU+2; idx.push(a,b,c, c,b,d);
         }
       }
-      return {verts:new Float32Array(verts), uvs:new Float32Array(uvs), idx:new Uint32Array(idx)};
+      // Choose Uint16 on WebGL1
+      const maxIndex = Math.max(...idx);
+      const useUInt = isWebGL2 || maxIndex <= 65535;
+      return { verts:new Float32Array(verts), uvs:new Float32Array(uvs), idx: useUInt ? new Uint16Array(idx) : new Uint32Array(idx), indexType: useUInt ? (isWebGL2 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT) : gl.UNSIGNED_INT };
     }
     const sphere = createSphere(64,64);
 
@@ -438,14 +352,34 @@
     gl.enableVertexAttribArray(loc.aUV); gl.vertexAttribPointer(loc.aUV, 2, gl.FLOAT, false, 0, 0);
 
     const ibo = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sphere.idx, gl.STATIC_DRAW);
+    // Enable OES_element_index_uint if needed
+    if (!isWebGL2 && sphere.indexType === gl.UNSIGNED_INT){
+      const ext = gl.getExtension('OES_element_index_uint');
+      if (!ext){
+        // Fallback: rebuild with Uint16
+        console.warn('UNSIGNED_INT indices not supported; rebuilding geometry as Uint16');
+      }
+    }
+    // If WebGL1, ensure data is Uint16
+    if (!isWebGL2){ 
+      if (!(sphere.idx instanceof Uint16Array)){ 
+        // Rebuild low-res with Uint16 to guarantee compatibility
+        const s2 = createSphere(48,48);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, s2.idx, gl.STATIC_DRAW);
+        var indexCount = s2.idx.length; var indexType = gl.UNSIGNED_SHORT;
+      } else {
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sphere.idx, gl.STATIC_DRAW);
+        var indexCount = sphere.idx.length; var indexType = gl.UNSIGNED_SHORT;
+      }
+    } else {
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sphere.idx, gl.STATIC_DRAW);
+      var indexCount = sphere.idx.length; var indexType = gl.UNSIGNED_INT;
+    }
 
-    // Model matrix (large inverted sphere)
     function mat4Identity(){ return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); }
     function mat4Scale(sx,sy,sz){ const m=mat4Identity(); m[0]=sx; m[5]=sy; m[10]=sz; return m; }
     const modelMatrix = mat4Scale(5000,5000,5000);
 
-    // Texture from <video>
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -454,8 +388,8 @@
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.uniform1i(loc.uTex, 0);
 
-    function updateVideoTexture() {
-      if (video.readyState >= 2 && !video.paused) {
+    function updateVideoTexture(){
+      if (video.readyState >= 2 && !video.paused){
         try {
           gl.bindTexture(gl.TEXTURE_2D, tex);
           gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -466,100 +400,59 @@
       }
     }
 
-    // Projection & View
-    function perspective(out, fovy, aspect, near, far){
+    function perspective(out,fovy,aspect,near,far){
       const f=1.0/Math.tan(fovy/2), nf=1/(near-far);
       out[0]=f/aspect; out[1]=0; out[2]=0; out[3]=0;
       out[4]=0; out[5]=f; out[6]=0; out[7]=0;
       out[8]=0; out[9]=0; out[10]=(far+near)*nf; out[11]=-1;
       out[12]=0; out[13]=0; out[14]=2*far*near*nf; out[15]=0; return out;
     }
-
-    // View matrix from final orientation (qFinal)
     function viewFromOrientation(qFinal){
-      // Camera view is inverse of world rotation; for unit quaternions, inverse = conjugate
-      const q = new Float32Array([-qFinal[0], -qFinal[1], -qFinal[2], qFinal[3]]);
+      const q=new Float32Array([-qFinal[0],-qFinal[1],-qFinal[2],qFinal[3]]);
       return qToMat4(q);
     }
 
-    // ======== Render loop (mono + Cardboard SBS) ========
-    let vrActive = false;
     const proj = new Float32Array(16);
-
-    function render() {
+    function render(){
       resizeCanvas();
-      gl.clearColor(0,0,0,1);
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       gl.disable(gl.CULL_FACE); gl.disable(gl.DEPTH_TEST);
-      updateVideoTexture();
-      gl.useProgram(prog);
-      gl.uniform1i(loc.uTex, 0);
-      gl.uniformMatrix4fv(loc.uModel, false, modelMatrix);
-
-      // Final world orientation = screen compensation * gyro orientation * yaw recenter
+      updateVideoTexture(); gl.useProgram(prog); gl.uniform1i(loc.uTex, 0); gl.uniformMatrix4fv(loc.uModel, false, modelMatrix);
       const qYaw = qFromAxisAngle(0,1,0, yawOffset);
       const qWorld = qMul(qMul(qScreen, qOrient), qYaw);
       const view = viewFromOrientation(qWorld);
 
-      if (vrActive) {
-        // Side-by-side viewports
-        const w = canvas.width, h = canvas.height;
-        const halfW = (w/2)|0;
+      if (vrActive){
+        const w=canvas.width,h=canvas.height, halfW=(w/2)|0;
         perspective(proj, Math.PI/2.0, halfW/h, 0.1, 10000.0);
-
-        // Left eye (mono)
-        gl.viewport(0, 0, halfW, h);
-        gl.uniformMatrix4fv(loc.uProj, false, proj);
-        gl.uniformMatrix4fv(loc.uView, false, view);
-        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_INT, 0);
-
-        // Right eye (mono duplicate)
-        gl.viewport(halfW, 0, halfW, h);
-        gl.uniformMatrix4fv(loc.uProj, false, proj);
-        gl.uniformMatrix4fv(loc.uView, false, view);
-        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_INT, 0);
+        gl.viewport(0,0,halfW,h); gl.uniformMatrix4fv(loc.uProj,false,proj); gl.uniformMatrix4fv(loc.uView,false,view); gl.drawElements(gl.TRIANGLES, indexCount, indexType, 0);
+        gl.viewport(halfW,0,halfW,h); gl.uniformMatrix4fv(loc.uProj,false,proj); gl.uniformMatrix4fv(loc.uView,false,view); gl.drawElements(gl.TRIANGLES, indexCount, indexType, 0);
       } else {
-        // Single-eye preview
         perspective(proj, Math.PI/2.0, canvas.width/canvas.height, 0.1, 10000.0);
-        gl.viewport(0, 0, canvas.width, canvas.height);
-        gl.uniformMatrix4fv(loc.uProj, false, proj);
-        gl.uniformMatrix4fv(loc.uView, false, view);
-        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_INT, 0);
+        gl.viewport(0,0,canvas.width,canvas.height); gl.uniformMatrix4fv(loc.uProj,false,proj); gl.uniformMatrix4fv(loc.uView,false,view); gl.drawElements(gl.TRIANGLES, indexCount, indexType, 0);
       }
       requestAnimationFrame(render);
     }
     requestAnimationFrame(render);
 
-    // ======== VR flow ========
-    async function enterVR() {
-      // Android Chrome typically doesn't require explicit permission, but we request if present (iOS safety).
-      try {
-        if (typeof DeviceMotionEvent !== 'undefined' &&
-            typeof DeviceMotionEvent.requestPermission === 'function') {
-          await DeviceMotionEvent.requestPermission().catch(()=>{});
-        }
-      } catch(e){}
-
+    // ============ VR flow ============
+    async function enterVR(){
       await ensureVideoPlays();
-      await goFullscreen();
-      await lockLandscape();
-      await requestWakeLock();
-
-      vrActive = true;
-      // small delay then recenter once (initial heading)
-      setTimeout(() => requestRecenter(), 200);
-      showToast('VR mode');
-      showUI(); // will fade automatically
+      await goFullscreen(); await lockLandscape(); await requestWakeLock();
+      await startSensors();
+      vrActive = true; setTimeout(() => requestRecenter(), 200);
+      showToast('VR mode'); showUI();
     }
+    vrBtn.addEventListener('click', () => { enterVR().catch(err => { console.error(err); vrActive = false; showToast('Could not enter VR'); }); });
 
-    vrBtn.addEventListener('click', () => {
-      enterVR().catch(err => {
-        console.error(err);
-        vrActive = false;
-        showToast('Could not enter VR');
-      });
-    });
+    recenterBtn.addEventListener('click', () => { requestRecenter(); showToast('Recentered'); showUI(); });
 
+    // Start sensors early if user taps the dedicated button (helps some Android PWA setups)
+    // Also start on first interaction if Enter VR isn't used
+    
+
+    // FYI: motion data only flows after a user gesture on many platforms.
+    setStatus('warn', 'Motion: tap “Enable motion” (or Enter VR)');
   })();
   </script>
 </body>
