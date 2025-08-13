@@ -4,12 +4,7 @@ const FILES_TO_CACHE = [
   './index.html',
   './manifest.json',
   './icons/icon-192.png',
-  './icons/icon-512.png',
-  './your-vr-script.js',  // Replace with your JS filename(s)
-  './your-styles.css',    // Replace with your CSS filename(s)
-  './three.min.js',       // If you’re using Three.js
-  './aframe.min.js'       // If you’re using A-Frame
-  // Add any other scripts, models, or textures
+  './icons/icon-512.png'
 ];
 
 self.addEventListener('install', event => {
