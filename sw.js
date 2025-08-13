@@ -1,11 +1,15 @@
-const CACHE_NAME = '360-vr-player-cache-v2';
+const CACHE_NAME = '360-vr-player-cache-v3';
 const FILES_TO_CACHE = [
   './',
   './index.html',
   './manifest.json',
   './icons/icon-192.png',
-  './icons/icon-512.png'
-  // Add any other JS/CSS/images if they exist
+  './icons/icon-512.png',
+  './your-vr-script.js',  // Replace with your JS filename(s)
+  './your-styles.css',    // Replace with your CSS filename(s)
+  './three.min.js',       // If you’re using Three.js
+  './aframe.min.js'       // If you’re using A-Frame
+  // Add any other scripts, models, or textures
 ];
 
 self.addEventListener('install', event => {
@@ -34,7 +38,6 @@ self.addEventListener('activate', event => {
 self.addEventListener('fetch', event => {
   event.respondWith(
     caches.match(event.request).then(response => {
-      // Return cached file if it exists, otherwise fetch from network
       return response || fetch(event.request);
     })
   );
