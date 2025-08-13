@@ -1,170 +1,566 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<title>360 VR Player (Cambridge XR)</title>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
-<meta name="theme-color" content="#000000"/>
-<link rel="manifest" href="manifest.json">
-<link rel="icon" sizes="192x192" href="icons/icon-192.png">
-<link rel="apple-touch-icon" sizes="192x192" href="icons/icon-192.png">
-<link rel="apple-touch-icon" sizes="512x512" href="icons/icon-512.png">
-<style>
-html,body {margin:0;padding:0;height:100%;background:#000;color:#fff;font-family:sans-serif;overflow:hidden;}
-canvas {display:block;width:100vw;height:100vh;}
-#ui {position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;pointer-events:none;opacity:1;transition:opacity .4s ease;}
-#ui.fade {opacity:0;}
-.btn {pointer-events:auto;appearance:none;border:none;padding:14px 16px;border-radius:12px;font-weight:600;font-size:1.05rem;background:#1a73e8;color:#fff;cursor:pointer;box-shadow:0 6px 18px rgba(26,115,232,.35);}
-.btn.secondary {background:#2b2b2b;}
-input[type=file]{display:none;}
-.footer {position:fixed;bottom:8px;left:50%;transform:translateX(-50%);font-size:.8rem;font-style:italic;color:#aaa;}
-</style>
-<script>
-if('serviceWorker' in navigator){
-  window.addEventListener('load',()=>{
-    navigator.serviceWorker.register('sw.js').catch(console.error);
-  });
-}
-</script>
+  <meta charset="utf-8" />
+  <title>360 VR Player (Cambridge XR)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <meta name="theme-color" content="#000000"/>
+
+  <!-- PWA Manifest (optional) -->
+  <link rel="manifest" href="manifest.json">
+
+  <!-- Icons (optional) -->
+  <link rel="icon" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="512x512" href="icons/icon-512.png">
+
+  <!-- Service Worker Registration (optional) -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js')
+          .then(reg => console.log('SW registered', reg.scope))
+          .catch(err => console.error('SW registration failed', err));
+      });
+    }
+  </script>
+
+  <style>
+    :root { --ui-fade-ms: 4000; }
+    html, body { margin:0; padding:0; height:100%; background:#000; color:#fff;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      overscroll-behavior: contain; touch-action: manipulation; }
+    canvas { display:block; width:100vw; height:100vh; }
+
+    /* Floating UI (panel + footer share fade/hidden states) */
+    #ui { position:fixed; inset:0; pointer-events:none; }
+    #panelWrap { position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; }
+    .panel { pointer-events:auto; display:grid; gap:12px; width:min(92vw,520px); text-align:center;
+      transition:opacity .35s ease; }
+    #footer { position:fixed; left:50%; bottom:10px; transform:translateX(-50%);
+      font-size:.8rem; font-style:italic; opacity:.85; transition:opacity .35s ease;
+      pointer-events:none; user-select:none; }
+    .faded { opacity:0; }
+    .hidden { display:none; }
+
+    .btn { appearance:none; border:none; outline:none; padding:14px 16px; border-radius:12px;
+      font-weight:600; font-size:1.05rem; background:#1a73e8; color:#fff; box-shadow:0 6px 18px rgba(26,115,232,.35);
+      cursor:pointer; transition:transform .06s ease, filter .2s ease, opacity .2s ease; width:100%; }
+    .btn.secondary { background:#2b2b2b; box-shadow:0 6px 18px rgba(0,0,0,.35); }
+    .btn[disabled]{ opacity:.5; cursor:not-allowed; }
+    input[type=file]{ display:none; }
+
+    #toast { position:fixed; bottom:56px; left:50%; transform:translateX(-50%);
+      background:rgba(0,0,0,.65); color:#fff; font-size:.95rem; padding:10px 12px; border-radius:10px;
+      opacity:0; transition:opacity .25s ease; pointer-events:none; }
+    #toast.show { opacity:1; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .panel, #footer, #toast { transition:none; }
+    }
+  </style>
 </head>
 <body>
-<canvas id="glcanvas"></canvas>
-<video id="video360" playsinline webkit-playsinline preload="metadata" loop crossorigin="anonymous" style="display:none"></video>
-<div id="ui">
-  <button id="selectBtn" class="btn secondary">Select simulation</button>
-  <input id="fileInput" type="file" accept="video/*" />
-  <button id="vrBtn" class="btn" disabled>Enter VR</button>
-</div>
-<div class="footer">Brought to you by Cambridge XR</div>
-<script>
-// ===== UI handling =====
-const ui=document.getElementById('ui'),fileInput=document.getElementById('fileInput'),
-selectBtn=document.getElementById('selectBtn'),vrBtn=document.getElementById('vrBtn'),
-video=document.getElementById('video360'); 
-let hideUITimer=null,cardboard=false,objectURL=null;
-function scheduleUIHide(){
-  clearTimeout(hideUITimer);
-  hideUITimer=setTimeout(()=>{ui.classList.add('fade');},4000);
-}
-function showUI(){
-  clearTimeout(hideUITimer);
-  ui.classList.remove('fade');
-  scheduleUIHide();
-}
-selectBtn.onclick=()=>fileInput.click();
-fileInput.onchange=async e=>{
-  const file=e.target.files?.[0];
-  if(!file)return;
-  if(objectURL)URL.revokeObjectURL(objectURL);
-  objectURL=URL.createObjectURL(file);
-  video.src=objectURL;
-  await video.play().catch(()=>{});
-  vrBtn.disabled=false;
-  showUI();
-};
-addEventListener('pointerdown',()=>{
-  if(cardboard){recenterView();}
-  else{showUI();}
-},{passive:true});
-// ===== Device orientation via quaternion =====
-let refQuat=null,currentQuat=[0,0,0,1],smoothedQuat=[0,0,0,1];
-function toRad(d){return d*Math.PI/180;}
-function quatFromEuler(alpha,beta,gamma){
-  const _x=toRad(beta),_y=toRad(gamma),_z=toRad(alpha);
-  const cX=Math.cos(_x/2),cY=Math.cos(_y/2),cZ=Math.cos(_z/2),
-        sX=Math.sin(_x/2),sY=Math.sin(_y/2),sZ=Math.sin(_z/2);
-  const w=cX*cY*cZ - sX*sY*sZ,
-        x=sX*cY*cZ - cX*sY*sZ,
-        y=cX*sY*cZ + sX*cY*sZ,
-        z=cX*cY*sZ + sX*sY*cZ;
-  return [x,y,z,w];
-}
-function quatMultiply(a,b){
-  return [
-    a[3]*b[0]+a[0]*b[3]+a[1]*b[2]-a[2]*b[1],
-    a[3]*b[1]-a[0]*b[2]+a[1]*b[3]+a[2]*b[0],
-    a[3]*b[2]+a[0]*b[1]-a[1]*b[0]+a[2]*b[3],
-    a[3]*b[3]-a[0]*b[0]-a[1]*b[1]-a[2]*b[2]
-  ];
-}
-function quatInverse(q){
-  const n=q[0]*q[0]+q[1]*q[1]+q[2]*q[2]+q[3]*q[3];
-  return [-q[0]/n,-q[1]/n,-q[2]/n,q[3]/n];
-}
-function recenterView(){refQuat=quatInverse(smoothedQuat);}
-addEventListener('deviceorientation',e=>{
-  if(e.alpha==null)return;
-  const q=quatFromEuler(e.alpha,e.beta,e.gamma);
-  const target=refQuat?quatMultiply(refQuat,q):q;
-  // smoothing
-  const s=0.15;
-  for(let i=0;i<4;i++)smoothedQuat[i]=smoothedQuat[i]*(1-s)+target[i]*s;
-},true);
-// ===== WebGL sphere rendering =====
-const canvas=document.getElementById('glcanvas');
-let gl=canvas.getContext('webgl')||canvas.getContext('experimental-webgl');
-function resize(){canvas.width=innerWidth*devicePixelRatio;canvas.height=innerHeight*devicePixelRatio;gl.viewport(0,0,canvas.width,canvas.height);}
-addEventListener('resize',resize);resize();
-// sphere geometry
-function createSphere(uSeg=64,vSeg=64){
-  const verts=[],uvs=[],idx=[];
-  for(let y=0;y<=vSeg;y++){
-    const v=y/vSeg,phi=v*Math.PI;
-    for(let x=0;x<=uSeg;x++){
-      const u=x/uSeg,theta=u*Math.PI*2;
-      const sx=Math.sin(phi)*Math.cos(theta),sy=Math.cos(phi),sz=Math.sin(phi)*Math.sin(theta);
-      verts.push(sx,sy,sz);uvs.push(u,1-v);
+
+  <!-- Rendering surface -->
+  <canvas id="glcanvas" aria-label="360 VR Canvas"></canvas>
+
+  <!-- Hidden <video> used as the texture -->
+  <video id="video360" playsinline webkit-playsinline preload="metadata" loop crossorigin="anonymous" style="display:none"></video>
+
+  <!-- Minimal floating UI -->
+  <div id="ui" aria-live="polite">
+    <div id="panelWrap">
+      <div id="panel" class="panel">
+        <button id="selectBtn" class="btn secondary" type="button">Select simulation</button>
+        <input id="fileInput" type="file" accept="video/*" />
+        <button id="vrBtn" class="btn" type="button" disabled>Enter VR</button>
+      </div>
+    </div>
+    <div id="footer">Brought to you by Cambridge XR</div>
+  </div>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+  (() => {
+    // ======== UI helpers ========
+    const ui = document.getElementById('ui');
+    const panel = document.getElementById('panel');
+    const footer = document.getElementById('footer');
+    const toast = document.getElementById('toast');
+    let hideUITimer = null;
+    const UI_HIDE_DELAY = 4000;
+
+    function showToast(msg, ms = 1800) {
+      toast.textContent = msg;
+      toast.classList.add('show');
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => toast.classList.remove('show'), ms);
     }
-  }
-  for(let y=0;y<vSeg;y++){
-    for(let x=0;x<uSeg;x++){
-      const i=y*(uSeg+1)+x;
-      idx.push(i,i+uSeg+1,i+1,i+1,i+uSeg+1,i+uSeg+2);
+    function fadeUI() {
+      panel.classList.add('faded');
+      footer.classList.add('faded');
     }
-  }
-  return {verts:new Float32Array(verts),uvs:new Float32Array(uvs),idx:new Uint16Array(idx)};
-}
-const sphere=createSphere();
-function compileShader(src,type){const s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw gl.getShaderInfoLog(s);return s;}
-const vs=compileShader(`attribute vec3 p;attribute vec2 t;varying vec2 v;uniform mat4 mvp;void main(){v=t;gl_Position=mvp*vec4(-p.x,p.y,p.z,1.0);}`,gl.VERTEX_SHADER);
-const fs=compileShader(`precision mediump float;varying vec2 v;uniform sampler2D tex;void main(){gl_FragColor=texture2D(tex,v);}`,gl.FRAGMENT_SHADER);
-const prog=gl.createProgram();gl.attachShader(prog,vs);gl.attachShader(prog,fs);gl.linkProgram(prog);
-gl.useProgram(prog);
-const pLoc=gl.getAttribLocation(prog,'p'),tLoc=gl.getAttribLocation(prog,'t'),
-mvpLoc=gl.getUniformLocation(prog,'mvp'),texLoc=gl.getUniformLocation(prog,'tex');
-function bufData(target,data,loc,size){const b=gl.createBuffer();gl.bindBuffer(target,b);gl.bufferData(target,data,gl.STATIC_DRAW);if(loc!==null){gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,size,gl.FLOAT,false,0,0);}return b;}
-bufData(gl.ARRAY_BUFFER,sphere.verts,pLoc,3);
-bufData(gl.ARRAY_BUFFER,sphere.uvs,tLoc,2);
-gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,bufData(gl.ELEMENT_ARRAY_BUFFER,sphere.idx,null,null));
-const tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
-function updateTex(){if(video.readyState>=2){gl.bindTexture(gl.TEXTURE_2D,tex);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,video);}}
-function perspective(out,fov,aspect,near,far){const f=1.0/Math.tan(fov/2),nf=1/(near-far);out[0]=f/aspect;out[1]=0;out[2]=0;out[3]=0;out[4]=0;out[5]=f;out[6]=0;out[7]=0;out[8]=0;out[9]=0;out[10]=(far+near)*nf;out[11]=-1;out[12]=0;out[13]=0;out[14]=2*far*near*nf;out[15]=0;}
-function quatToMat4(q){const [x,y,z,w]=q;const x2=x+x,y2=y+y,z2=z+z;const xx=x*x2,xy=x*y2,xz=x*z2,yy=y*y2,yz=y*z2,zz=z*z2,wx=w*x2,wy=w*y2,wz=w*z2;return new Float32Array([1-(yy+zz),xy+wz,xz-wy,0,xy-wz,1-(xx+zz),yz+wx,0,xz+wy,yz-wx,1-(xx+yy),0,0,0,0,1]);}
-function multiplyMat4(a,b){const out=new Float32Array(16);for(let i=0;i<4;i++){for(let j=0;j<4;j++){out[i*4+j]=a[i*4+0]*b[0*4+j]+a[i*4+1]*b[1*4+j]+a[i*4+2]*b[2*4+j]+a[i*4+3]*b[3*4+j];}}return out;}
-function render(){resize();updateTex();gl.clearColor(0,0,0,1);gl.clear(gl.COLOR_BUFFER_BIT);
-const aspect=canvas.width/canvas.height;const proj=new Float32Array(16);
-if(cardboard){
-  const halfW=canvas.width/2;const aspectEye=halfW/canvas.height;perspective(proj,Math.PI/2,aspectEye,0.1,100);
-  const view=quatToMat4(smoothedQuat);
-  gl.viewport(0,0,halfW,canvas.height);gl.uniformMatrix4fv(mvpLoc,false,multiplyMat4(proj,view));gl.drawElements(gl.TRIANGLES,sphere.idx.length,gl.UNSIGNED_SHORT,0);
-  gl.viewport(halfW,0,halfW,canvas.height);gl.uniformMatrix4fv(mvpLoc,false,multiplyMat4(proj,view));gl.drawElements(gl.TRIANGLES,sphere.idx.length,gl.UNSIGNED_SHORT,0);
-} else {
-  perspective(proj,Math.PI/2,aspect,0.1,100);const view=quatToMat4(smoothedQuat);
-  gl.viewport(0,0,canvas.width,canvas.height);gl.uniformMatrix4fv(mvpLoc,false,multiplyMat4(proj,view));gl.drawElements(gl.TRIANGLES,sphere.idx.length,gl.UNSIGNED_SHORT,0);
-}
-requestAnimationFrame(render);}
-render();
-// ===== VR button =====
-vrBtn.onclick=async()=>{
-  if(typeof DeviceOrientationEvent!=="undefined" && typeof DeviceOrientationEvent.requestPermission==="function"){
-    const resp=await DeviceOrientationEvent.requestPermission();if(resp!=="granted")return;
-  }
-  cardboard=true;
-  try{await screen.orientation.lock('landscape');}catch(e){}
-  recenterView();
-  showUI();
-};
-scheduleUIHide();
-</script>
+    function showUI() {
+      clearTimeout(hideUITimer);
+      panel.classList.remove('faded');
+      footer.classList.remove('faded');
+      hideUITimer = setTimeout(fadeUI, UI_HIDE_DELAY);
+    }
+    // Show UI initially, then fade
+    showUI();
+    addEventListener('pointerdown', () => {
+      showUI();
+      // If we're already in VR, a single tap anywhere recenters
+      if (vrActive) requestRecenter();
+    }, {passive:true});
+
+    // ======== Video / file handling ========
+    const fileInput = document.getElementById('fileInput');
+    const selectBtn = document.getElementById('selectBtn');
+    const vrBtn = document.getElementById('vrBtn');
+    const video = document.getElementById('video360');
+    let objectURL = null;
+
+    selectBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) return;
+      try {
+        if (objectURL) URL.revokeObjectURL(objectURL);
+        objectURL = URL.createObjectURL(file);
+        video.src = objectURL;
+        video.loop = true;
+        video.playsInline = true;
+        video.setAttribute('playsinline', '');
+        video.setAttribute('webkit-playsinline', '');
+        await ensureVideoPlays();
+        vrBtn.disabled = false;
+        showToast('Simulation loaded.');
+        showUI();
+      } catch (err) {
+        console.error(err);
+        showToast('Could not load video.');
+      }
+    });
+
+    async function ensureVideoPlays() {
+      try { video.muted = false; await video.play(); }
+      catch (e) { /* a second tap may be needed on some devices */ }
+    }
+
+    // ======== Power/orientation helpers ========
+    let wakeLock = null;
+    async function requestWakeLock() {
+      try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }
+      catch (e) {}
+    }
+    document.addEventListener('visibilitychange', async () => {
+      if (wakeLock !== null && document.visibilityState === 'visible') {
+        try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+      }
+    });
+
+    async function lockLandscape() {
+      try {
+        if (screen.orientation && screen.orientation.lock) {
+          await screen.orientation.lock('landscape');
+        }
+      } catch(e) {}
+    }
+    async function goFullscreen() {
+      try {
+        const el = document.documentElement;
+        if (el.requestFullscreen) await el.requestFullscreen();
+        else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
+      } catch (e) {}
+    }
+
+    // ======== Sensor Fusion (Gyro + Gravity), Quaternion-based ========
+    // We purposely IGNORE compass heading to avoid magnetic flips.
+
+    // --- Quaternion helpers ---
+    function qIdentity(){ return new Float32Array([0,0,0,1]); }                 // [x,y,z,w]
+    function qNormalize(q){ const s=1/Math.hypot(q[0],q[1],q[2],q[3]); q[0]*=s;q[1]*=s;q[2]*=s;q[3]*=s; return q; }
+    function qMul(a,b){
+      const ax=a[0], ay=a[1], az=a[2], aw=a[3];
+      const bx=b[0], by=b[1], bz=b[2], bw=b[3];
+      return new Float32Array([
+        aw*bx + ax*bw + ay*bz - az*by,
+        aw*by - ax*bz + ay*bw + az*bx,
+        aw*bz + ax*by - ay*bx + az*bw,
+        aw*bw - ax*bx - ay*by - az*bz
+      ]);
+    }
+    function qFromAxisAngle(x,y,z,angle){
+      const h=angle*0.5, s=Math.sin(h);
+      return new Float32Array([x*s, y*s, z*s, Math.cos(h)]);
+    }
+    function qSlerp(a,b,t){
+      // Safe slerp
+      let ax=a[0], ay=a[1], az=a[2], aw=a[3];
+      let bx=b[0], by=b[1], bz=b[2], bw=b[3];
+      let cos = ax*bx + ay*by + az*bz + aw*bw;
+      if (cos < 0) { bx=-bx; by=-by; bz=-bz; bw=-bw; cos=-cos; }
+      if (cos > 0.9995) {
+        // linear fallback
+        const out = new Float32Array([ax+(bx-ax)*t, ay+(by-ay)*t, az+(bz-az)*t, aw+(bw-aw)*t]);
+        return qNormalize(out);
+      }
+      const theta = Math.acos(cos), s = Math.sin(theta);
+      const w1 = Math.sin((1-t)*theta)/s, w2 = Math.sin(t*theta)/s;
+      return new Float32Array([ax*w1+bx*w2, ay*w1+by*w2, az*w1+bz*w2, aw*w1+bw*w2]);
+    }
+    function qRotateVector(q, v){ // returns q * [v,0] * q^-1
+      const x=v[0], y=v[1], z=v[2];
+      const qx=q[0], qy=q[1], qz=q[2], qw=q[3];
+      // t = 2 * cross(q.xyz, v)
+      const tx = 2*(qy*z - qz*y);
+      const ty = 2*(qz*x - qx*z);
+      const tz = 2*(qx*y - qy*x);
+      // v' = v + qw*t + cross(q.xyz, t)
+      return new Float32Array([
+        x + qw*tx + (qy*tz - qz*ty),
+        y + qw*ty + (qz*tx - qx*tz),
+        z + qw*tz + (qx*ty - qy*tx)
+      ]);
+    }
+    function qToMat4(q){
+      const x=q[0], y=q[1], z=q[2], w=q[3];
+      const x2=x+x, y2=y+y, z2=z+z;
+      const xx=x*x2, xy=x*y2, xz=x*z2;
+      const yy=y*y2, yz=y*z2, zz=z*z2;
+      const wx=w*x2, wy=w*y2, wz=w*z2;
+      // Column-major 4x4 rotation
+      return new Float32Array([
+        1-(yy+zz), xy+wz,     xz-wy,     0,
+        xy-wz,     1-(xx+zz), yz+wx,     0,
+        xz+wy,     yz-wx,     1-(xx+yy), 0,
+        0,         0,         0,         1
+      ]);
+    }
+
+    // Gyro integration orientation
+    let qOrient = qIdentity();          // device orientation (gyro integrated)
+    let qScreen = qIdentity();          // compensates screen orientation (landscape etc.)
+    let yawOffset = 0;                  // recenter offset around global up (Y)
+
+    // gravity correction parameters
+    const GRAVITY_BLEND = 0.02;         // small long-term correction per frame
+    const MIN_G = 7.0, MAX_G = 13.0;    // accept gravity magnitude window (m/s^2)
+
+    // track last timestamp for integration
+    let lastGyroTs = null;
+
+    // update qScreen whenever screen orientation changes
+    function computeQScreen(){
+      const angle = (screen.orientation && typeof screen.orientation.angle === 'number')
+        ? screen.orientation.angle : window.orientation || 0;
+      const rad = (angle||0) * Math.PI/180;
+      // Map device coordinates (x-right, y-up, z-out-of-screen) to our world camera coords (OpenGL-style)
+      // Start with: rotate about Z by -angle to neutralize screen rotation
+      const qA = qFromAxisAngle(0,0,1,-rad);
+      // Then rotate so that when phone is in landscape, its -Z faces forward and +Y is up.
+      // Empirically, a -90° rotation about X aligns device Y-up to world Z-forward; then -90° about Z for landscape.
+      // We'll use a fixed -90° about X to point device Z toward forward when held upright.
+      const qB = qFromAxisAngle(1,0,0, -Math.PI/2);
+      qScreen = qMul(qA, qB);
+    }
+    computeQScreen();
+    addEventListener('orientationchange', computeQScreen);
+    if (screen.orientation) screen.orientation.addEventListener('change', computeQScreen);
+
+    // Recenter: store a yaw offset that rotates current forward to world -Z
+    function requestRecenter(){
+      // Current forward vector in world space
+      const qWorld = qMul(qScreen, qOrient);
+      const fwd = qRotateVector(qWorld, [0,0,-1]); // camera looks -Z
+      // Project onto XZ plane to get yaw
+      const yaw = Math.atan2(fwd[0], -fwd[2]); // +x => left, -z forward
+      yawOffset = -yaw; // rotate by -yaw to face forward
+      showToast('Recentered');
+    }
+
+    // Optional: initial small yaw alignment using deviceorientationabsolute (single sample)
+    let absoluteAligned = false;
+    addEventListener('deviceorientationabsolute', (e) => {
+      if (absoluteAligned || e.absolute !== true) return;
+      // only use once, and only to help initial heading — but we still ignore it later
+      absoluteAligned = true;
+      // Just do an initial recenter shortly after VR enters; handled below via setTimeout
+    }, {once:true});
+
+    // DeviceMotion: integrate gyro; correct with gravity
+    let haveGyro = false, haveAccel = false;
+    addEventListener('devicemotion', (e) => {
+      // rotationRate in deg/s: alpha(z), beta(x), gamma(y)
+      const rr = e.rotationRate;
+      const ts = e.timeStamp; // ms
+      if (!rr || ts == null) return;
+      let dt = 0;
+      if (lastGyroTs != null) dt = Math.max(0, (ts - lastGyroTs) / 1000);
+      lastGyroTs = ts;
+
+      // Integrate gyro only if dt > 0
+      if (dt > 0) {
+        haveGyro = true;
+        const wx = (rr.beta || 0) * Math.PI/180;  // x rad/s
+        const wy = (rr.gamma || 0) * Math.PI/180; // y rad/s
+        const wz = (rr.alpha || 0) * Math.PI/180; // z rad/s
+        const mag = Math.hypot(wx, wy, wz);
+        if (mag > 0) {
+          const dq = qFromAxisAngle(wx/mag, wy/mag, wz/mag, mag*dt);
+          qOrient = qNormalize(qMul(qOrient, dq));
+        }
+      }
+
+      // Gravity correction (long-term drift fix for roll/pitch)
+      const g = e.accelerationIncludingGravity;
+      if (g) {
+        const gx=g.x||0, gy=g.y||0, gz=g.z||0;
+        const gm = Math.hypot(gx,gy,gz);
+        if (gm > MIN_G && gm < MAX_G) {
+          haveAccel = true;
+          // gravity in device coords -> world via qScreen
+          const gDev = [gx,gy,gz];
+          const gWorld = qRotateVector(qScreen, gDev);
+          // current up vector from orientation
+          const qWorld = qMul(qScreen, qOrient);
+          const up = qRotateVector(qWorld, [0,1,0]);   // world up from current view
+          // desired up should align with -gWorld direction
+          const targetUp = new Float32Array([-gWorld[0]/gm, -gWorld[1]/gm, -gWorld[2]/gm]);
+
+          // rotation from current up to targetUp
+          const crossX = up[1]*targetUp[2] - up[2]*targetUp[1];
+          const crossY = up[2]*targetUp[0] - up[0]*targetUp[2];
+          const crossZ = up[0]*targetUp[1] - up[1]*targetUp[0];
+          const dot = Math.max(-1, Math.min(1, up[0]*targetUp[0] + up[1]*targetUp[1] + up[2]*targetUp[2]));
+          const angle = Math.acos(dot);
+          if (angle > 1e-4) {
+            const axisMag = Math.hypot(crossX, crossY, crossZ) || 1;
+            const axis = [crossX/axisMag, crossY/axisMag, crossZ/axisMag];
+            const qCorr = qFromAxisAngle(axis[0], axis[1], axis[2], angle * GRAVITY_BLEND);
+            // Apply small correction in world space: qOrient = qScreen^-1 * qCorr * qScreen * qOrient
+            // Since qScreen is fixed, pre/post multiply around orientation
+            // Compute qIn = qScreen * qOrient, want qOut = qCorr * qIn => qOrient' = qScreen^-1 * qOut
+            // For small step, approximate by applying in device frame:
+            qOrient = qNormalize(qMul(qCorr, qOrient));
+          }
+        }
+      }
+    }, {passive:true});
+
+    // ======== WebGL setup ========
+    const canvas = document.getElementById('glcanvas');
+    let gl = canvas.getContext('webgl2', {alpha:false, antialias:true});
+    if (!gl) gl = canvas.getContext('webgl', {alpha:false, antialias:true});
+
+    function resizeCanvas() {
+      const dpr = Math.max(1, Math.min(2, devicePixelRatio || 1));
+      const w = Math.floor(innerWidth * dpr), h = Math.floor(innerHeight * dpr);
+      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+      gl.viewport(0, 0, canvas.width, canvas.height);
+    }
+    addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    // Shaders
+    const vsSrc = `
+      attribute vec3 aPosition;
+      attribute vec2 aUV;
+      uniform mat4 uProj;
+      uniform mat4 uView;
+      uniform mat4 uModel;
+      varying vec2 vUV;
+      void main() {
+        // Flip X so we view the inside of sphere
+        vec4 pos = uModel * vec4(aPosition * vec3(-1.0, 1.0, 1.0), 1.0);
+        gl_Position = uProj * uView * pos;
+        vUV = vec2(1.0 - aUV.x, aUV.y);
+      }
+    `;
+    const fsSrc = `
+      precision mediump float;
+      varying vec2 vUV;
+      uniform sampler2D uTex;
+      void main() { gl_FragColor = texture2D(uTex, vUV); }
+    `;
+    function compileShader(type, src) {
+      const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+        console.error(gl.getShaderInfoLog(s)); gl.deleteShader(s); return null;
+      }
+      return s;
+    }
+    function createProgram(vs, fs) {
+      const p = gl.createProgram(); gl.attachShader(p, vs); gl.attachShader(p, fs); gl.linkProgram(p);
+      if (!gl.getProgramParameter(p, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(p)); return null; }
+      return p;
+    }
+    const prog = createProgram(compileShader(gl.VERTEX_SHADER, vsSrc), compileShader(gl.FRAGMENT_SHADER, fsSrc));
+    gl.useProgram(prog);
+    const loc = {
+      aPosition: gl.getAttribLocation(prog, 'aPosition'),
+      aUV: gl.getAttribLocation(prog, 'aUV'),
+      uProj: gl.getUniformLocation(prog, 'uProj'),
+      uView: gl.getUniformLocation(prog, 'uView'),
+      uModel: gl.getUniformLocation(prog, 'uModel'),
+      uTex: gl.getUniformLocation(prog, 'uTex'),
+    };
+
+    // Sphere geometry
+    function createSphere(segU=64, segV=64) {
+      const verts=[], uvs=[], idx=[];
+      for (let y=0; y<=segV; y++) {
+        const v = y/segV; const phi = v*Math.PI;
+        for (let x=0; x<=segU; x++) {
+          const u = x/segU; const theta = u*Math.PI*2.0;
+          const sx=Math.sin(phi)*Math.cos(theta), sy=Math.cos(phi), sz=Math.sin(phi)*Math.sin(theta);
+          verts.push(sx, sy, sz); uvs.push(u, v);
+        }
+      }
+      for (let y=0; y<segV; y++) {
+        for (let x=0; x<segU; x++) {
+          const i=y*(segU+1)+x; const a=i, b=i+segU+1, c=i+1, d=i+segU+2; idx.push(a,b,c, c,b,d);
+        }
+      }
+      return {verts:new Float32Array(verts), uvs:new Float32Array(uvs), idx:new Uint32Array(idx)};
+    }
+    const sphere = createSphere(64,64);
+
+    const vboPos = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vboPos);
+    gl.bufferData(gl.ARRAY_BUFFER, sphere.verts, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(loc.aPosition); gl.vertexAttribPointer(loc.aPosition, 3, gl.FLOAT, false, 0, 0);
+
+    const vboUV = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vboUV);
+    gl.bufferData(gl.ARRAY_BUFFER, sphere.uvs, gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(loc.aUV); gl.vertexAttribPointer(loc.aUV, 2, gl.FLOAT, false, 0, 0);
+
+    const ibo = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sphere.idx, gl.STATIC_DRAW);
+
+    // Model matrix (large inverted sphere)
+    function mat4Identity(){ return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); }
+    function mat4Scale(sx,sy,sz){ const m=mat4Identity(); m[0]=sx; m[5]=sy; m[10]=sz; return m; }
+    const modelMatrix = mat4Scale(5000,5000,5000);
+
+    // Texture from <video>
+    const tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.uniform1i(loc.uTex, 0);
+
+    function updateVideoTexture() {
+      if (video.readyState >= 2 && !video.paused) {
+        try {
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+        } catch (e) {
+          try { gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, video); } catch(e2){}
+        }
+      }
+    }
+
+    // Projection & View
+    function perspective(out, fovy, aspect, near, far){
+      const f=1.0/Math.tan(fovy/2), nf=1/(near-far);
+      out[0]=f/aspect; out[1]=0; out[2]=0; out[3]=0;
+      out[4]=0; out[5]=f; out[6]=0; out[7]=0;
+      out[8]=0; out[9]=0; out[10]=(far+near)*nf; out[11]=-1;
+      out[12]=0; out[13]=0; out[14]=2*far*near*nf; out[15]=0; return out;
+    }
+
+    // View matrix from final orientation (qFinal)
+    function viewFromOrientation(qFinal){
+      // Camera view is inverse of world rotation; for unit quaternions, inverse = conjugate
+      const q = new Float32Array([-qFinal[0], -qFinal[1], -qFinal[2], qFinal[3]]);
+      return qToMat4(q);
+    }
+
+    // ======== Render loop (mono + Cardboard SBS) ========
+    let vrActive = false;
+    const proj = new Float32Array(16);
+
+    function render() {
+      resizeCanvas();
+      gl.clearColor(0,0,0,1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.disable(gl.CULL_FACE); gl.disable(gl.DEPTH_TEST);
+      updateVideoTexture();
+      gl.useProgram(prog);
+      gl.uniform1i(loc.uTex, 0);
+      gl.uniformMatrix4fv(loc.uModel, false, modelMatrix);
+
+      // Final world orientation = screen compensation * gyro orientation * yaw recenter
+      const qYaw = qFromAxisAngle(0,1,0, yawOffset);
+      const qWorld = qMul(qMul(qScreen, qOrient), qYaw);
+      const view = viewFromOrientation(qWorld);
+
+      if (vrActive) {
+        // Side-by-side viewports
+        const w = canvas.width, h = canvas.height;
+        const halfW = (w/2)|0;
+        perspective(proj, Math.PI/2.0, halfW/h, 0.1, 10000.0);
+
+        // Left eye (mono)
+        gl.viewport(0, 0, halfW, h);
+        gl.uniformMatrix4fv(loc.uProj, false, proj);
+        gl.uniformMatrix4fv(loc.uView, false, view);
+        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_INT, 0);
+
+        // Right eye (mono duplicate)
+        gl.viewport(halfW, 0, halfW, h);
+        gl.uniformMatrix4fv(loc.uProj, false, proj);
+        gl.uniformMatrix4fv(loc.uView, false, view);
+        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_INT, 0);
+      } else {
+        // Single-eye preview
+        perspective(proj, Math.PI/2.0, canvas.width/canvas.height, 0.1, 10000.0);
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.uniformMatrix4fv(loc.uProj, false, proj);
+        gl.uniformMatrix4fv(loc.uView, false, view);
+        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_INT, 0);
+      }
+      requestAnimationFrame(render);
+    }
+    requestAnimationFrame(render);
+
+    // ======== VR flow ========
+    async function enterVR() {
+      // Android Chrome typically doesn't require explicit permission, but we request if present (iOS safety).
+      try {
+        if (typeof DeviceMotionEvent !== 'undefined' &&
+            typeof DeviceMotionEvent.requestPermission === 'function') {
+          await DeviceMotionEvent.requestPermission().catch(()=>{});
+        }
+      } catch(e){}
+
+      await ensureVideoPlays();
+      await goFullscreen();
+      await lockLandscape();
+      await requestWakeLock();
+
+      vrActive = true;
+      // small delay then recenter once (initial heading)
+      setTimeout(() => requestRecenter(), 200);
+      showToast('VR mode');
+      showUI(); // will fade automatically
+    }
+
+    vrBtn.addEventListener('click', () => {
+      enterVR().catch(err => {
+        console.error(err);
+        vrActive = false;
+        showToast('Could not enter VR');
+      });
+    });
+
+  })();
+  </script>
 </body>
 </html>
