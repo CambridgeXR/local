@@ -6,20 +6,29 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
   <meta name="theme-color" content="#000000"/>
 
-  <!-- (Optional) PWA Manifest; keep if you already have the files -->
+  <!-- PWA Manifest -->
   <link rel="manifest" href="manifest.json">
 
-  <!-- App icons (keep your existing files/paths) -->
+  <!-- App icons -->
   <link rel="icon" sizes="192x192" href="icons/icon-192.png">
   <link rel="apple-touch-icon" sizes="192x192" href="icons/icon-192.png">
   <link rel="apple-touch-icon" sizes="512x512" href="icons/icon-512.png">
 
-  <style>
-    html, body {
-      margin:0; padding:0; height:100%; background:#000; color:#fff;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-      overscroll-behavior: contain; touch-action: manipulation;
+  <!-- Service Worker Registration -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js')
+          .then(reg => console.log('SW registered', reg.scope))
+          .catch(err => console.error('SW registration failed', err));
+      });
     }
+  </script>
+
+  <style>
+    html, body { margin:0; padding:0; height:100%; background:#000; color:#fff;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      overscroll-behavior: contain; touch-action: manipulation; }
     canvas { display:block; width:100vw; height:100vh; }
 
     #ui { position:fixed; inset:0; display:grid; place-items:center; pointer-events:none;
@@ -60,7 +69,6 @@
       <button id="selectBtn" class="btn secondary" type="button">Select simulation</button>
       <input id="fileInput" type="file" accept="video/*" />
       <button id="cardboardBtn" class="btn" type="button" disabled>Enter Cardboard</button>
-      <button id="recenterBtn" class="btn secondary" type="button" disabled>Recenter (tap)</button>
       <div id="brandText" class="brand">Brought to you by Cambridge XR</div>
     </div>
   </div>
@@ -99,7 +107,6 @@
     const fileInput = document.getElementById('fileInput');
     const selectBtn = document.getElementById('selectBtn');
     const cardboardBtn = document.getElementById('cardboardBtn');
-    const recenterBtn = document.getElementById('recenterBtn');
     const video = document.getElementById('video360');
     let objectURL = null;
 
@@ -117,7 +124,6 @@
         video.setAttribute('webkit-playsinline', '');
         await ensureVideoPlays();
         cardboardBtn.disabled = false;
-        recenterBtn.disabled = false;
         showToast('Simulation loaded.');
         showUI();
       } catch (err) {
@@ -128,10 +134,9 @@
 
     async function ensureVideoPlays() {
       try {
-        // Start muted for autoplay on Android; user can raise volume with HW keys
-        video.muted = true;
+        video.muted = false;
         await video.play();
-      } catch (e) { /* a second tap may be needed on some devices */ }
+      } catch (e) { /* some devices need a second tap */ }
     }
 
     // ======== Wake Lock & orientation ========
@@ -162,112 +167,98 @@
       } catch (e) {}
     }
 
-    // ======== DeviceOrientation (quaternion-based, robust for Android) ========
-    // Implements mapping equivalent to three.js DeviceOrientationControls:
-    //   euler.set(beta, alpha, -gamma, 'YXZ');
-    //   q = fromEuler(euler) * q1 * qScreen(-orientZ)
-    // where q1 = rotation of -PI/2 around X (camera looks out the back),
-    // and screen orientation compensates portrait/landscape.
+    // ======== Orientation (robust quaternion pipeline) ========
+    // Based on the proven mapping in three.js DeviceOrientationControls.
+    const DEG2RAD = Math.PI / 180;
+    const ZAXIS = [0,0,1];
+    const XAXIS = [1,0,0];
 
-    // Small quaternion helper set
-    function quatFromEulerYXZ(beta, alpha, minusGamma) {
-      // beta (X), alpha (Y), -gamma (Z), order YXZ
-      const x = beta, y = alpha, z = minusGamma;
-      const c1 = Math.cos(y/2), c2 = Math.cos(x/2), c3 = Math.cos(z/2);
-      const s1 = Math.sin(y/2), s2 = Math.sin(x/2), s3 = Math.sin(z/2);
-      // Y * X * Z
-      const q = new Float32Array(4);
-      q[0] = s2*c1*c3 + c2*s1*s3; // x
-      q[1] = c2*s1*c3 - s2*c1*s3; // y
-      q[2] = c2*c1*s3 + s2*s1*c3; // z
-      q[3] = c2*c1*c3 - s2*s1*s3; // w
-      return q;
+    // Simple quaternion helper
+    function qIdentity(){ return new Float32Array([0,0,0,1]); } // x,y,z,w
+    function qMultiply(out, a, b){
+      const ax=a[0], ay=a[1], az=a[2], aw=a[3];
+      const bx=b[0], by=b[1], bz=b[2], bw=b[3];
+      out[0] = aw*bx + ax*bw + ay*bz - az*by;
+      out[1] = aw*by - ax*bz + ay*bw + az*bx;
+      out[2] = aw*bz + ax*by - ay*bx + az*bw;
+      out[3] = aw*bw - ax*bx - ay*by - az*bz;
+      return out;
     }
-    function quatMultiply(a, b) {
-      return new Float32Array([
-        a[3]*b[0] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1],
-        a[3]*b[1] - a[0]*b[2] + a[1]*b[3] + a[2]*b[0],
-        a[3]*b[2] + a[0]*b[1] - a[1]*b[0] + a[2]*b[3],
-        a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2]
-      ]);
+    function qSetFromAxisAngle(out, axis, angle){
+      const half=angle*0.5, s=Math.sin(half);
+      out[0]=axis[0]*s; out[1]=axis[1]*s; out[2]=axis[2]*s; out[3]=Math.cos(half);
+      return out;
     }
-    function quatConjugate(q) { return new Float32Array([-q[0], -q[1], -q[2], q[3]]); }
-    function quatSlerp(a, b, t) {
-      let cosom = a[0]*b[0] + a[1]*b[1] + a[2]*b[2] + a[3]*b[3];
-      let bx = b[0], by = b[1], bz = b[2], bw = b[3];
-      if (cosom < 0) { cosom = -cosom; bx = -bx; by = -by; bz = -bz; bw = -bw; }
-      let scale0, scale1;
-      if (1 - cosom > 1e-6) {
-        const omega = Math.acos(cosom);
-        const sinom = Math.sin(omega);
-        scale0 = Math.sin((1 - t) * omega) / sinom;
-        scale1 = Math.sin(t * omega) / sinom;
-      } else {
-        // nearly identical; lerp
-        scale0 = 1 - t; scale1 = t;
+    // Set from DeviceOrientation Euler with order 'YXZ'
+    function qFromDeviceEuler(out, beta, alpha, gamma){ // beta(X), alpha(Z), gamma(Y)
+      const x = beta * DEG2RAD;
+      const y = alpha * DEG2RAD;
+      const z = -gamma * DEG2RAD; // note the minus (matches three.js)
+      const c1=Math.cos(y/2), c2=Math.cos(x/2), c3=Math.cos(z/2);
+      const s1=Math.sin(y/2), s2=Math.sin(x/2), s3=Math.sin(z/2);
+      // Order Y * X * Z:
+      out[0] = s2*c1*c3 + c2*s1*s3;
+      out[1] = s1*c2*c3 + c1*s2*s3;
+      out[2] = c1*c2*s3 - s1*s2*c3;
+      out[3] = c1*c2*c3 - s1*s2*s3;
+      return out;
+    }
+    function qConjugate(out, q){ out[0]=-q[0]; out[1]=-q[1]; out[2]=-q[2]; out[3]=q[3]; return out; }
+    function qNormalize(out,q){ const l=Math.hypot(q[0],q[1],q[2],q[3])||1; out[0]=q[0]/l; out[1]=q[1]/l; out[2]=q[2]/l; out[3]=q[3]/l; return out; }
+    function qSlerp(out, a, b, t){
+      // robust slerp
+      let ax=a[0], ay=a[1], az=a[2], aw=a[3];
+      let bx=b[0], by=b[1], bz=b[2], bw=b[3];
+      let cos = ax*bx + ay*by + az*bz + aw*bw;
+      if (cos < 0){ cos = -cos; bx=-bx; by=-by; bz=-bz; bw=-bw; }
+      if (1 - cos < 1e-6){ // linear fallback
+        out[0]=ax + t*(bx-ax); out[1]=ay + t*(by-ay); out[2]=az + t*(bz-az); out[3]=aw + t*(bw-aw);
+        return qNormalize(out,out);
       }
-      return new Float32Array([
-        scale0*a[0] + scale1*bx,
-        scale0*a[1] + scale1*by,
-        scale0*a[2] + scale1*bz,
-        scale0*a[3] + scale1*bw
-      ]);
+      const theta = Math.acos(cos);
+      const s = Math.sin(theta);
+      const s1 = Math.sin((1-t)*theta)/s;
+      const s2 = Math.sin(t*theta)/s;
+      out[0]=ax*s1 + bx*s2; out[1]=ay*s1 + by*s2; out[2]=az*s1 + bz*s2; out[3]=aw*s1 + bw*s2;
+      return out;
     }
-    function quatToMat4(q) {
+    function mat4FromQuat(out, q){ // column-major
       const x=q[0], y=q[1], z=q[2], w=q[3];
       const x2=x+x, y2=y+y, z2=z+z;
       const xx=x*x2, xy=x*y2, xz=x*z2;
       const yy=y*y2, yz=y*z2, zz=z*z2;
       const wx=w*x2, wy=w*y2, wz=w*z2;
-      // rotation matrix (column-major)
-      return new Float32Array([
-        1-(yy+zz), xy+wz,    xz-wy,    0,
-        xy-wz,     1-(xx+zz),yz+wx,    0,
-        xz+wy,     yz-wx,    1-(xx+yy),0,
-        0,         0,        0,        1
-      ]);
-    }
-    function mat4Invert(out, a) {
-      const m=a, b=new Float32Array(16);
-      b[0]=m[5]*m[10]*m[15]-m[5]*m[11]*m[14]-m[9]*m[6]*m[15]+m[9]*m[7]*m[14]+m[13]*m[6]*m[11]-m[13]*m[7]*m[10];
-      b[4]=-m[4]*m[10]*m[15]+m[4]*m[11]*m[14]+m[8]*m[6]*m[15]-m[8]*m[7]*m[14]-m[12]*m[6]*m[11]+m[12]*m[7]*m[10];
-      b[8]=m[4]*m[9]*m[15]-m[4]*m[11]*m[13]-m[8]*m[5]*m[15]+m[8]*m[7]*m[13]+m[12]*m[5]*m[11]-m[12]*m[7]*m[9];
-      b[12]=-m[4]*m[9]*m[14]+m[4]*m[10]*m[13]+m[8]*m[5]*m[14]-m[8]*m[6]*m[13]-m[12]*m[5]*m[10]+m[12]*m[6]*m[9];
-      b[1]=-m[1]*m[10]*m[15]+m[1]*m[11]*m[14]+m[9]*m[2]*m[15]-m[9]*m[3]*m[14]-m[13]*m[2]*m[11]+m[13]*m[3]*m[10];
-      b[5]=m[0]*m[10]*m[15]-m[0]*m[11]*m[14]-m[8]*m[2]*m[15]+m[8]*m[3]*m[14]+m[12]*m[2]*m[11]-m[12]*m[3]*m[10];
-      b[9]=-m[0]*m[9]*m[15]+m[0]*m[11]*m[13]-m[8]*m[1]*m[15]-m[8]*m[3]*m[13]-m[12]*m[1]*m[11]+m[12]*m[3]*m[9];
-      b[13]=m[0]*m[9]*m[14]-m[0]*m[10]*m[13]-m[8]*m[1]*m[14]+m[8]*m[2]*m[13]+m[12]*m[1]*m[10]-m[12]*m[2]*m[9];
-      b[2]=m[1]*m[6]*m[15]-m[1]*m[7]*m[14]-m[5]*m[2]*m[15]+m[5]*m[3]*m[14]+m[13]*m[2]*m[7]-m[13]*m[3]*m[6];
-      b[6]=-m[0]*m[6]*m[15]+m[0]*m[7]*m[14]+m[4]*m[2]*m[15]-m[4]*m[3]*m[14]-m[12]*m[2]*m[7]+m[12]*m[3]*m[6];
-      b[10]=m[0]*m[5]*m[15]-m[0]*m[7]*m[13]-m[4]*m[1]*m[15]+m[4]*m[3]*m[13]+m[12]*m[1]*m[7]-m[12]*m[3]*m[5];
-      b[14]=-m[0]*m[5]*m[14]+m[0]*m[6]*m[13]+m[4]*m[1]*m[14]-m[4]*m[2]*m[13]-m[12]*m[1]*m[6]+m[12]*m[2]*m[5];
-      b[3]=-m[1]*m[6]*m[11]+m[1]*m[7]*m[10]+m[5]*m[2]*m[11]-m[5]*m[3]*m[10]-m[9]*m[2]*m[7]+m[9]*m[3]*m[6];
-      b[7]=m[0]*m[6]*m[11]-m[0]*m[7]*m[10]-m[4]*m[2]*m[11]+m[4]*m[3]*m[10]+m[8]*m[2]*m[7]-m[8]*m[3]*m[6];
-      b[11]=-m[0]*m[5]*m[11]+m[0]*m[7]*m[9]+m[4]*m[1]*m[11]-m[4]*m[3]*m[9]-m[8]*m[1]*m[7]+m[8]*m[3]*m[5];
-      b[15]=m[0]*b[0]+m[1]*b[4]+m[2]*b[8]+m[3]*b[12];
-      let det = m[0]*b[0] + m[1]*b[4] + m[2]*b[8] + m[3]*b[12];
-      if (!det) { out.set([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); return out; }
-      det = 1.0/det; for (let i=0;i<16;i++) out[i]=b[i]*det; return out;
+      out[0]=1-(yy+zz); out[1]=xy+wz; out[2]=xz-wy; out[3]=0;
+      out[4]=xy-wz; out[5]=1-(xx+zz); out[6]=yz+wx; out[7]=0;
+      out[8]=xz+wy; out[9]=yz-wx; out[10]=1-(xx+yy); out[11]=0;
+      out[12]=0; out[13]=0; out[14]=0; out[15]=1; return out;
     }
 
-    // Constant rotations
-    const q1_minusHalfPiX = new Float32Array([ -Math.SQRT1_2, 0, 0, Math.SQRT1_2 ]); // -PI/2 about X
-    function qFromAxisAngleZ(angle) {
-      const s = Math.sin(angle/2), c = Math.cos(angle/2);
-      return new Float32Array([0,0,s,c]); // axis Z
-    }
-
-    // Orientation state
-    let targetHeadQ = new Float32Array([0,0,0,1]); // device-derived
-    let smoothedHeadQ = new Float32Array([0,0,0,1]); // filtered
-    let recenterQ = new Float32Array([0,0,0,1]); // yaw-only recenter offset
     let havePermission = false;
+    let usingDO = false; // using DeviceOrientation fallback
+    let targetQ = qIdentity(); // latest reading
+    let smoothQ = qIdentity(); // filtered
+    const FIX_X = qSetFromAxisAngle(new Float32Array(4), XAXIS, -Math.PI/2); // phone back->forward
 
-    function getScreenOrientationRad() {
-      const ang = (screen.orientation && typeof screen.orientation.angle === 'number')
+    function getScreenOrientRad(){
+      const o = (screen.orientation && typeof screen.orientation.angle === 'number')
         ? screen.orientation.angle
-        : (window.orientation || 0);
-      return (ang || 0) * Math.PI / 180;
+        : window.orientation || 0;
+      return (o % 360) * DEG2RAD;
+    }
+
+    // DeviceOrientation fallback (works on Android Chrome)
+    function initDeviceOrientation(){
+      usingDO = true;
+      window.addEventListener('deviceorientation', (e) => {
+        if (e.alpha==null || e.beta==null || e.gamma==null) return;
+        const q = qIdentity();
+        qFromDeviceEuler(q, e.beta, e.alpha, e.gamma);          // phone orientation
+        qMultiply(q, q, FIX_X);                                  // rotate to camera-forward
+        const qScreen = qSetFromAxisAngle(new Float32Array(4), ZAXIS, -getScreenOrientRad());
+        qMultiply(q, q, qScreen);                                // compensate screen orientation
+        targetQ = qNormalize(qIdentity(), q);
+      }, {passive:true});
     }
 
     async function requestOrientationPermission() {
@@ -277,75 +268,17 @@
           const resp = await DeviceOrientationEvent.requestPermission();
           havePermission = (resp === 'granted');
         } else {
-          // Chrome Android typically doesn't require requestPermission()
-          havePermission = true;
+          havePermission = true; // Android Chrome usually doesn't need explicit request
         }
       } catch (e) { havePermission = false; }
       return havePermission;
     }
 
-    function updateTargetQuaternionFromDevice(alpha, beta, gamma) {
-      // Convert to radians
-      const a = (alpha || 0) * Math.PI/180;     // Z (compass)
-      const b = (beta  || 0) * Math.PI/180;     // X' (front/back tilt)
-      const g = (gamma || 0) * Math.PI/180;     // Y'' (left/right tilt)
-      // Device to world: euler(beta, alpha, -gamma, 'YXZ')
-      let q = quatFromEulerYXZ(b, a, -g);
-      // Camera looks out the back of the device, not the top
-      q = quatMultiply(q, q1_minusHalfPiX);
-      // Compensate for screen orientation (portrait/landscape)
-      const orient = getScreenOrientationRad();
-      const qScreen = qFromAxisAngleZ(-orient);
-      q = quatMultiply(q, qScreen);
-      // Apply recenter (yaw-only offset)
-      q = quatMultiply(recenterQ, q);
-      targetHeadQ = q;
-    }
-
-    // Recenter: capture current yaw and zero it
-    function extractYawFromQuat(q) {
-      // yaw around Y in world after our mapping; compute from matrix
-      const m = quatToMat4(q);
-      // From rotation matrix, yaw = atan2(m[8], m[0]) in our construction? Use standard yaw from Z-forward camera.
-      // We want rotation around world up (Y). Using heading = atan2(m[2], m[10]) depends on convention.
-      // Safer: project forward vector and compute angle in XZ plane.
-      const fx = m[8];  const fz = m[10]; // third column is forward (camera -Z); our matrix maps object->world
-      const yaw = Math.atan2(fx, fz);
-      return yaw;
-    }
-    function quatFromYaw(yaw) {
-      const s = Math.sin(yaw/2), c = Math.cos(yaw/2);
-      return new Float32Array([0, s, 0, c]); // rotate about Y
-    }
-    function recenterNow() {
-      // Set recenterQ to inverse of current yaw
-      const yaw = extractYawFromQuat(targetHeadQ);
-      const qYawInv = quatConjugate(quatFromYaw(yaw));
-      recenterQ = qYawInv;
-      showToast('View recentered');
-    }
-
-    // Device orientation events (use both if available)
-    function onDeviceOrientation(e) {
-      if (e.alpha == null || e.beta == null || e.gamma == null) return;
-      updateTargetQuaternionFromDevice(e.alpha, e.beta, e.gamma);
-    }
-    window.addEventListener('deviceorientation', onDeviceOrientation, true);
-    // Some devices fire 'deviceorientationabsolute'; listen too
-    window.addEventListener('deviceorientationabsolute', onDeviceOrientation, true);
-
-    // Button for recenter
-    recenterBtn.addEventListener('click', recenterNow);
-
-    // Also allow quick tap on canvas to recenter when in Cardboard
-    document.getElementById('glcanvas').addEventListener('click', () => {
-      if (cardboard) recenterNow();
-    });
-
     // ======== WebGL setup ========
     const canvas = document.getElementById('glcanvas');
     let gl = canvas.getContext('webgl2', {alpha:false, antialias:true});
-    if (!gl) gl = canvas.getContext('webgl', {alpha:false, antialias:true});
+    let isWebGL2 = !!gl;
+    if (!gl) { gl = canvas.getContext('webgl', {alpha:false, antialias:true}) || canvas.getContext('experimental-webgl'); isWebGL2 = false; }
 
     function resizeCanvas() {
       const dpr = Math.max(1, Math.min(2, devicePixelRatio || 1));
@@ -354,35 +287,46 @@
       gl.viewport(0, 0, canvas.width, canvas.height);
     }
     addEventListener('resize', resizeCanvas);
-    addEventListener('orientationchange', () => {
-      // Kick screen-orientation compensation immediately on rotation
-      setTimeout(resizeCanvas, 50);
-    });
+    if ('orientation' in screen && screen.orientation) {
+      screen.orientation.addEventListener('change', () => {}); // ensures getScreenOrientRad updates
+    }
     resizeCanvas();
 
-    // Shaders
-    const vsSrc = `
+    // Shaders (GLSL 1.00 for WebGL1, 3.00 ES for WebGL2)
+    const vsSrc = isWebGL2 ? `#version 300 es
+      in vec3 aPosition;
+      in vec2 aUV;
+      uniform mat4 uProj;
+      uniform mat4 uView;
+      uniform mat4 uModel;
+      out vec2 vUV;
+      void main(){
+        vec4 pos = uModel * vec4(aPosition * vec3(-1.0, 1.0, 1.0), 1.0);
+        gl_Position = uProj * uView * pos;
+        vUV = vec2(1.0 - aUV.x, aUV.y);
+      }` : `
       attribute vec3 aPosition;
       attribute vec2 aUV;
       uniform mat4 uProj;
       uniform mat4 uView;
       uniform mat4 uModel;
       varying vec2 vUV;
-      void main() {
-        // Flip X so we view the inside of sphere
+      void main(){
         vec4 pos = uModel * vec4(aPosition * vec3(-1.0, 1.0, 1.0), 1.0);
         gl_Position = uProj * uView * pos;
         vUV = vec2(1.0 - aUV.x, aUV.y);
-      }
-    `;
-    const fsSrc = `
+      }`;
+    const fsSrc = isWebGL2 ? `#version 300 es
+      precision mediump float;
+      in vec2 vUV;
+      uniform sampler2D uTex;
+      out vec4 fragColor;
+      void main(){ fragColor = texture(uTex, vUV); }` : `
       precision mediump float;
       varying vec2 vUV;
       uniform sampler2D uTex;
-      void main() {
-        gl_FragColor = texture2D(uTex, vUV);
-      }
-    `;
+      void main(){ gl_FragColor = texture2D(uTex, vUV); }`;
+
     function compileShader(type, src) {
       const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
       if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
@@ -398,8 +342,8 @@
     const prog = createProgram(compileShader(gl.VERTEX_SHADER, vsSrc), compileShader(gl.FRAGMENT_SHADER, fsSrc));
     gl.useProgram(prog);
     const loc = {
-      aPosition: gl.getAttribLocation(prog, 'aPosition'),
-      aUV: gl.getAttribLocation(prog, 'aUV'),
+      aPosition: gl.getAttribLocation(prog, isWebGL2 ? 'aPosition' : 'aPosition'),
+      aUV: gl.getAttribLocation(prog, isWebGL2 ? 'aUV' : 'aUV'),
       uProj: gl.getUniformLocation(prog, 'uProj'),
       uView: gl.getUniformLocation(prog, 'uView'),
       uModel: gl.getUniformLocation(prog, 'uModel'),
@@ -422,8 +366,7 @@
           const i=y*(segU+1)+x; const a=i, b=i+segU+1, c=i+1, d=i+segU+2; idx.push(a,b,c, c,b,d);
         }
       }
-      // Use Uint16 for wide mobile compatibility
-      return {verts:new Float32Array(verts), uvs:new Float32Array(uvs), idx:new Uint16Array(idx)};
+      return {verts:new Float32Array(verts), uvs:new Float32Array(uvs), idx:idx};
     }
     const sphere = createSphere(64,64);
 
@@ -436,7 +379,14 @@
     gl.enableVertexAttribArray(loc.aUV); gl.vertexAttribPointer(loc.aUV, 2, gl.FLOAT, false, 0, 0);
 
     const ibo = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sphere.idx, gl.STATIC_DRAW);
+    // Use Uint32 where supported (WebGL2 or extension); otherwise Uint16 to avoid artifacts on older devices.
+    let indexType = gl.UNSIGNED_SHORT;
+    if (isWebGL2 || gl.getExtension('OES_element_index_uint')) {
+      indexType = gl.UNSIGNED_INT;
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(sphere.idx), gl.STATIC_DRAW);
+    } else {
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(sphere.idx), gl.STATIC_DRAW);
+    }
 
     // Model matrix (big sphere)
     function mat4Identity(){ return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); }
@@ -457,7 +407,8 @@
         try {
           gl.bindTexture(gl.TEXTURE_2D, tex);
           gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+          if (isWebGL2) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+          else gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
         } catch (e) {
           try { gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, video); } catch(e2){}
         }
@@ -477,10 +428,7 @@
     let cardboard = false;
     const proj = new Float32Array(16);
     const view = new Float32Array(16);
-    const viewRot = new Float32Array(16);
-
-    // Smoothing factor (0..1): higher = more responsive, lower = smoother
-    const SMOOTH = 0.22;
+    const SMOOTHING = 0.18; // 0..1 (higher = snappier)
 
     function render() {
       resizeCanvas();
@@ -492,35 +440,33 @@
       gl.uniform1i(loc.uTex, 0);
       gl.uniformMatrix4fv(loc.uModel, false, modelMatrix);
 
-      // Smooth orientation
-      smoothedHeadQ = quatSlerp(smoothedHeadQ, targetHeadQ, SMOOTH);
-
-      // Camera view = inverse of head rotation
-      const rot = quatToMat4(smoothedHeadQ);
-      mat4Invert(viewRot, rot);
+      // Smooth the orientation to reduce jitter
+      qSlerp(smoothQ, smoothQ, targetQ, SMOOTHING);
+      const viewQ = qConjugate(new Float32Array(4), smoothQ); // inverse rotation for view
+      mat4FromQuat(view, viewQ);
 
       if (cardboard) {
-        const w = canvas.width, h = canvas.height, halfW = (w/2)|0;
-        // ~90° FOV is comfortable in cardboard
-        perspective(proj, Math.PI/2.1, halfW/h, 0.1, 10000.0);
+        const w = canvas.width, h = canvas.height;
+        const halfW = (w/2)|0;
+        perspective(proj, Math.PI/2.0, halfW/h, 0.1, 10000.0);
+
+        gl.uniformMatrix4fv(loc.uProj, false, proj);
 
         // Left eye
         gl.viewport(0, 0, halfW, h);
-        gl.uniformMatrix4fv(loc.uProj, false, proj);
-        gl.uniformMatrix4fv(loc.uView, false, viewRot);
-        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_SHORT, 0);
+        gl.uniformMatrix4fv(loc.uView, false, view);
+        gl.drawElements(gl.TRIANGLES, sphere.idx.length, indexType, 0);
 
-        // Right eye (same mono content — monoscopic video)
+        // Right eye (mono)
         gl.viewport(halfW, 0, halfW, h);
-        gl.uniformMatrix4fv(loc.uProj, false, proj);
-        gl.uniformMatrix4fv(loc.uView, false, viewRot);
-        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_SHORT, 0);
+        gl.uniformMatrix4fv(loc.uView, false, view);
+        gl.drawElements(gl.TRIANGLES, sphere.idx.length, indexType, 0);
       } else {
-        perspective(proj, Math.PI/2.2, canvas.width/canvas.height, 0.1, 10000.0);
+        perspective(proj, Math.PI/2.0, canvas.width/canvas.height, 0.1, 10000.0);
         gl.viewport(0, 0, canvas.width, canvas.height);
         gl.uniformMatrix4fv(loc.uProj, false, proj);
-        gl.uniformMatrix4fv(loc.uView, false, viewRot);
-        gl.drawElements(gl.TRIANGLES, sphere.idx.length, gl.UNSIGNED_SHORT, 0);
+        gl.uniformMatrix4fv(loc.uView, false, view);
+        gl.drawElements(gl.TRIANGLES, sphere.idx.length, indexType, 0);
       }
       requestAnimationFrame(render);
     }
@@ -529,18 +475,13 @@
     // ======== Cardboard flow ========
     async function enterCardboard() {
       const permissionGranted = await requestOrientationPermission();
-      if (!permissionGranted) {
-        showToast('Motion/Orientation permission denied');
-        return;
-      }
+      if (!permissionGranted) { showToast('Motion/Orientation permission denied'); return; }
 
-      try {
-        const el = document.documentElement;
-        if (el.requestFullscreen) el.requestFullscreen();
-        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
-      } catch (e) { console.warn("Fullscreen request failed", e); }
+      // Prefer robust DeviceOrientation pipeline (Generic Sensor is commonly blocked on GitHub Pages)
+      initDeviceOrientation();
 
       await ensureVideoPlays();
+      await goFullscreen();
       await lockLandscape();
       await requestWakeLock();
 
@@ -552,9 +493,6 @@
           ui.addEventListener('transitionend', done, {once:true});
         } else { done(); }
       });
-
-      // Initialize recenter so "current forward" is forward on entry
-      recenterNow();
 
       cardboard = true;
       showToast('Cardboard mode');
@@ -572,6 +510,7 @@
 
     // Start preview & UI fade
     requestAnimationFrame(() => { scheduleUIHide(); });
+
   })();
   </script>
 </body>
