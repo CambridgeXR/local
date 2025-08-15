@@ -6,9 +6,10 @@
   <meta name="theme-color" content="#0b0f19" />
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="apple-touch-icon" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png?v=6">
   <title>XR Viewer</title>
-  <link rel="manifest" href="./manifest.json" />
+  <!-- cache-busted manifest -->
+  <link rel="manifest" href="./manifest.json?v=6" />
   <style>
     :root { --bg:#0b0f19; --fg:#e5e7eb; --muted:#9aa3b2; }
     html,body {
@@ -21,20 +22,14 @@
     }
     #app { position:fixed; inset:0; overflow:hidden; }
     canvas { display:block; width:100%; height:100%; }
-
-    /* Minimal overlay UI */
     .ui { position:fixed; inset:0; display:grid; place-items:center; pointer-events:none; }
     .ui-inner { pointer-events:auto; display:flex; flex-direction:column; gap:.75rem; align-items:center; }
     button { appearance:none; border:0; padding:.9rem 1.1rem; border-radius:1rem; background:#121a2b; color:var(--fg); font-weight:600; letter-spacing:.2px; box-shadow:0 6px 24px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05); width:200px; }
     button:active { transform: translateY(1px); }
     .title { font-style: italic; color: var(--muted); font-size:.9rem; margin-top:.25rem; }
-
-    /* Show/Hide with fade */
     .hidden { opacity:0; transform: translateY(8px); pointer-events:none; }
     .visible { opacity:1; transform: translateY(0); }
     .fade { transition: opacity .25s ease, transform .25s ease; }
-
-    /* Tap target to toggle controls */
     #tapzone { position:fixed; inset:0; background:transparent; }
   </style>
 </head>
@@ -42,7 +37,6 @@
   <div id="app"></div>
   <div id="tapzone" aria-label="toggle controls"></div>
 
-  <!-- Minimal UI -->
   <div class="ui">
     <div id="ui" class="ui-inner fade visible">
       <button id="selectBtn">Select simulation</button>
@@ -52,7 +46,6 @@
     </div>
   </div>
 
-  <!-- Hidden input for local video selection -->
   <input id="file" type="file" accept="video/*" style="display:none" />
 
   <!-- three.js core -->
@@ -99,11 +92,11 @@
     renderer.xr.enabled = true; // allow WebXR if available
     app.appendChild(renderer.domElement);
 
-    // Create sphere for 360 video (inside-out)
+    // Sphere for 360 video (inside-out)
     let sphere, material, texture;
     function buildSphere() {
       const geometry = new THREE.SphereGeometry(500, 64, 64);
-      geometry.scale(-1, 1, 1); // invert to view from inside
+      geometry.scale(-1, 1, 1);
       texture = new THREE.VideoTexture(video);
       texture.colorSpace = THREE.SRGBColorSpace;
       material = new THREE.MeshBasicMaterial({ map: texture });
@@ -117,17 +110,17 @@
     controls.connect();
 
     // ---- State ----
-    let yawOffset = 0;        // applied in mono/stereo modes
-    let mode = 'mono';        // 'mono' | 'stereo' | 'webxr'
-    const SMOOTH_ALPHA = 0.12;
-    const smoothedQuat = new THREE.Quaternion();
-    smoothedQuat.copy(camera.quaternion);
+    let yawOffset = 0;           // applied in mono/stereo modes
+    let mode = 'mono';           // 'mono' | 'stereo' | 'webxr'
+    const SMOOTH_ALPHA = 0.12;   // smoothing per frame
+    const smoothedQuat = new THREE.Quaternion().copy(camera.quaternion);
 
+    // Recenter
     function recenter() {
       if (mode === 'webxr') {
         const xrCam = renderer.xr.getCamera();
         const euler = new THREE.Euler().setFromQuaternion(xrCam.quaternion, 'YXZ');
-        sphere.rotation.y = -euler.y;
+        sphere.rotation.y = -euler.y; // rotate world to face forward
       } else {
         const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
         yawOffset = euler.y;
@@ -169,7 +162,7 @@
     const xrLoop = () => { renderer.render(scene, camera); };
 
     function animate(){
-      if (mode === 'webxr') return;
+      if (mode === 'webxr') return; // XR uses setAnimationLoop
       requestAnimationFrame(animate);
       if (mode === 'stereo') renderStereo(); else renderMono();
     }
@@ -182,6 +175,7 @@
     }
     window.addEventListener('resize', onResize);
 
+    // UI: auto-hide + toggle on tap
     const ui = document.getElementById('ui');
     const tapzone = document.getElementById('tapzone');
     let uiTimer = null;
@@ -202,6 +196,7 @@
     });
     uiTimer = setTimeout(() => hideUI(), 3000);
 
+    // Buttons
     const selectBtn = document.getElementById('selectBtn');
     const vrBtn = document.getElementById('vrBtn');
     const recenterBtn = document.getElementById('recenterBtn');
@@ -258,6 +253,7 @@
     document.getElementById('vrBtn').addEventListener('click', enterVR);
     recenterBtn.addEventListener('click', recenter);
 
+    // Drag & drop
     document.addEventListener('dragover', e => { e.preventDefault(); });
     document.addEventListener('drop', e => {
       e.preventDefault();
@@ -265,16 +261,17 @@
       if (file && file.type.startsWith('video/')) startVideo(URL.createObjectURL(file));
     });
 
+    // Prevent pinch-zoom
     window.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive:false });
   })();
   </script>
 
-  <!-- Service worker registration -->
+  <!-- cache-busted SW registration -->
   <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', async () => {
       try {
-        const reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+        const reg = await navigator.serviceWorker.register('./sw.js?v=6', { scope: './' });
         if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
         navigator.serviceWorker.addEventListener('controllerchange', () => {
           if (!window.__reloaded) { window.__reloaded = true; location.reload(); }
