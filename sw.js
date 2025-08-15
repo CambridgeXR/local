@@ -1,15 +1,18 @@
 // sw.js
-const CACHE = '360-vr-player-cache-v5'; // bump to deploy a fresh version
+const VERSION = '6'; // bump this for each deploy
+const CACHE = `360-vr-player-cache-v${VERSION}`;
+
+// Append version query to all shell assets
 const APP_SHELL = [
   './',
-  './?source=pwa',            // start_url so the installed app opens offline
+  './?source=pwa',
   './index.html',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/maskable-192.png',
   './icons/maskable-512.png'
-];
+].map(url => `${url}${url.includes('?') ? '&' : '?'}v=${VERSION}`);
 
 // Install: precache the app shell
 self.addEventListener('install', (event) => {
@@ -65,7 +68,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   // 2) Don’t intercept byte-range/media or blob/filesystem (video playback, local files)
-  if (req.headers.has('range') || url.protocol === 'blob:' || url.protocol === 'filesystem:')) {
+  if (req.headers.has('range') || url.protocol === 'blob:' || url.protocol === 'filesystem:') {
     return; // let browser handle it directly
   }
 
