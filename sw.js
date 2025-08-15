@@ -1,8 +1,7 @@
 // sw.js
-const VERSION = '6'; // bump this for each deploy
+const VERSION = '7'; // bump this for each deploy
 const CACHE = `360-vr-player-cache-v${VERSION}`;
 
-// Append version query to all shell assets
 const APP_SHELL = [
   './',
   './?source=pwa',
@@ -14,7 +13,6 @@ const APP_SHELL = [
   './icons/maskable-512.png'
 ].map(url => `${url}${url.includes('?') ? '&' : '?'}v=${VERSION}`);
 
-// Install: precache the app shell
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE)
@@ -23,7 +21,6 @@ self.addEventListener('install', (event) => {
   );
 });
 
-// Activate: clean old caches + enable navigation preload
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     try { await self.registration.navigationPreload?.enable(); } catch {}
@@ -33,20 +30,16 @@ self.addEventListener('activate', (event) => {
   })());
 });
 
-// Allow page to trigger an immediate update
 self.addEventListener('message', (event) => {
   if (event.data === 'SKIP_WAITING') self.skipWaiting();
 });
 
-// Fetch: smarter strategies
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   const url = new URL(req.url);
 
-  // Only GET is cacheable
   if (req.method !== 'GET') return;
 
-  // 1) Navigations: network-first with offline fallback to app shell
   if (req.mode === 'navigate') {
     event.respondWith((async () => {
       try {
@@ -67,12 +60,10 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 2) Don’t intercept byte-range/media or blob/filesystem (video playback, local files)
   if (req.headers.has('range') || url.protocol === 'blob:' || url.protocol === 'filesystem:') {
-    return; // let browser handle it directly
+    return;
   }
 
-  // 3) Same-origin static assets: cache-first
   if (url.origin === location.origin) {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE);
@@ -85,7 +76,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 4) CDN (e.g., jsDelivr for three.js): stale-while-revalidate
   if (url.hostname.endsWith('cdn.jsdelivr.net')) {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE);
