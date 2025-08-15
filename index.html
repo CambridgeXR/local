@@ -4,11 +4,21 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
   <meta name="theme-color" content="#0b0f19" />
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png">
   <title>XR Viewer</title>
   <link rel="manifest" href="./manifest.json" />
   <style>
     :root { --bg:#0b0f19; --fg:#e5e7eb; --muted:#9aa3b2; }
-    html,body { height:100%; margin:0; background:var(--bg); color:var(--fg); font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif; }
+    html,body {
+      height:100%;
+      margin:0;
+      background:var(--bg);
+      color:var(--fg);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif;
+      overscroll-behavior: none;
+    }
     #app { position:fixed; inset:0; overflow:hidden; }
     canvas { display:block; width:100%; height:100%; }
 
@@ -109,24 +119,21 @@
     // ---- State ----
     let yawOffset = 0;        // applied in mono/stereo modes
     let mode = 'mono';        // 'mono' | 'stereo' | 'webxr'
-    // smoothing for reduced jitter
-    const SMOOTH_ALPHA = 0.12; // 0..1 per frame
+    const SMOOTH_ALPHA = 0.12;
     const smoothedQuat = new THREE.Quaternion();
     smoothedQuat.copy(camera.quaternion);
 
-    // Recenter by zeroing yaw offset (mono/stereo) or rotating world (XR)
     function recenter() {
       if (mode === 'webxr') {
         const xrCam = renderer.xr.getCamera();
         const euler = new THREE.Euler().setFromQuaternion(xrCam.quaternion, 'YXZ');
-        sphere.rotation.y = -euler.y; // rotate world to face forward
+        sphere.rotation.y = -euler.y;
       } else {
         const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
-        yawOffset = euler.y; // subtract in render loop
+        yawOffset = euler.y;
       }
     }
 
-    // ---- Rendering ----
     function renderMono(){
       controls.update();
       const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
@@ -150,28 +157,24 @@
       const h = renderer.domElement.height;
 
       renderer.setScissorTest(true);
-      // Left eye
       renderer.setViewport(0, 0, w/2, h);
       renderer.setScissor(0, 0, w/2, h);
       renderer.render(scene, camera);
-      // Right eye
       renderer.setViewport(w/2, 0, w/2, h);
       renderer.setScissor(w/2, 0, w/2, h);
       renderer.render(scene, camera);
       renderer.setScissorTest(false);
     }
 
-    // WebXR loop (phone + supported browser)
     const xrLoop = () => { renderer.render(scene, camera); };
 
     function animate(){
-      if (mode === 'webxr') return; // XR uses setAnimationLoop
+      if (mode === 'webxr') return;
       requestAnimationFrame(animate);
       if (mode === 'stereo') renderStereo(); else renderMono();
     }
     animate();
 
-    // Resize
     function onResize(){
       camera.aspect = window.innerWidth / window.innerHeight;
       camera.updateProjectionMatrix();
@@ -179,7 +182,6 @@
     }
     window.addEventListener('resize', onResize);
 
-    // UI logic: auto-hide after tap and toggle on any screen tap
     const ui = document.getElementById('ui');
     const tapzone = document.getElementById('tapzone');
     let uiTimer = null;
@@ -200,7 +202,6 @@
     });
     uiTimer = setTimeout(() => hideUI(), 3000);
 
-    // Buttons
     const selectBtn = document.getElementById('selectBtn');
     const vrBtn = document.getElementById('vrBtn');
     const recenterBtn = document.getElementById('recenterBtn');
@@ -220,7 +221,6 @@
       video.play().then(() => {
         vrBtn.disabled = false;
       }).catch(() => {
-        // Autoplay with sound may be blocked; try muted
         video.muted = true;
         video.play().then(() => { vrBtn.disabled = false; }).catch(()=>{});
       });
@@ -251,16 +251,13 @@
     }
 
     async function enterVR(){
-      // Prefer WebXR; fallback to stereo fullscreen
       const ok = await enterWebXR();
       if (!ok) await enterCardboard();
     }
 
-    // Wire buttons
     document.getElementById('vrBtn').addEventListener('click', enterVR);
     recenterBtn.addEventListener('click', recenter);
 
-    // Optional: drag & drop
     document.addEventListener('dragover', e => { e.preventDefault(); });
     document.addEventListener('drop', e => {
       e.preventDefault();
@@ -268,9 +265,23 @@
       if (file && file.type.startsWith('video/')) startVideo(URL.createObjectURL(file));
     });
 
-    // Prevent pinch-zoom
     window.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive:false });
   })();
+  </script>
+
+  <!-- Service worker registration -->
+  <script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', async () => {
+      try {
+        const reg = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+        if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (!window.__reloaded) { window.__reloaded = true; location.reload(); }
+        });
+      } catch (e) { console.warn('SW registration failed', e); }
+    });
+  }
   </script>
 </body>
 </html>
