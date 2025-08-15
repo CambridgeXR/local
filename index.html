@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#0b0f19" />
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="apple-touch-icon" href="./icons/icon-192.png?v=11">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png?v=12">
   <title>VR Offline</title>
-  <link rel="manifest" href="./manifest.json?v=11" />
+  <link rel="manifest" href="./manifest.json?v=12" />
   <style>
     :root { --bg:#0b0f19; --fg:#e5e7eb; --muted:#9aa3b2; }
     html,body {
@@ -19,11 +19,14 @@
     #app { position:fixed; inset:0; overflow:hidden; z-index:0; }
     canvas { display:block; width:100%; height:100%; }
 
-    /* Tapzone sits UNDER the UI */
-    #tapzone { position:fixed; inset:0; background:transparent; z-index:1; }
+    /* Tapzone sits OVER the canvas and UNDER the buttons */
+    #tapzone {
+      position:fixed; inset:0; background:transparent;
+      z-index: 900; pointer-events:auto;
+    }
 
     /* UI sits ABOVE the tapzone and accepts pointer events */
-    .ui { position:fixed; inset:0; display:grid; place-items:center; z-index:10; pointer-events:auto; }
+    .ui { position:fixed; inset:0; display:grid; place-items:center; z-index:1000; pointer-events:auto; }
     .ui-inner { display:flex; flex-direction:column; gap:.8rem; align-items:center; }
 
     h1.appTitle {
@@ -48,12 +51,14 @@
     .visible { opacity:1; transform: translateY(0); }
     .fade { transition: opacity .25s ease, transform .25s ease; }
 
-    /* File input: not display:none; invisible & non-interactive, but programmatically opened */
+    /* File input: not display:none; invisible so showPicker()/click() works on Android */
     #file { position:fixed; width:1px; height:1px; opacity:0; pointer-events:none; }
   </style>
 </head>
 <body>
   <div id="app"></div>
+
+  <!-- Fullscreen tap layer to toggle controls -->
   <div id="tapzone" aria-label="toggle controls"></div>
 
   <!-- Minimal UI -->
@@ -118,16 +123,14 @@
     }
     buildSphere();
 
-    // Orientation controls — robust guard so init never crashes
+    // Orientation controls — guard against errors
     let controls = null;
     try {
       if (THREE.DeviceOrientationControls) {
         controls = new THREE.DeviceOrientationControls(camera, true);
         controls.connect();
       }
-    } catch (e) {
-      console.warn('DeviceOrientationControls unavailable; continuing without it.');
-    }
+    } catch (e) { console.warn('DeviceOrientationControls unavailable; continuing.'); }
 
     // State
     let yawOffset = 0;
@@ -187,143 +190,22 @@
     }
     window.addEventListener('resize', onResize);
 
-    // UI show/hide
+    // UI show/hide (robust)
     const ui = document.getElementById('ui');
     const tapzone = document.getElementById('tapzone');
     let uiTimer = null;
-    function showUI(){ ui.classList.remove('hidden'); ui.classList.add('visible'); clearTimeout(uiTimer); uiTimer = setTimeout(hideUI, 2500); }
-    function hideUI(){ ui.classList.remove('visible'); ui.classList.add('hidden'); }
-    tapzone.addEventListener('click', () => {
-      const isHidden = ui.classList.contains('hidden');
-      if (isHidden) showUI(); else hideUI();
-      if (video.src && video.paused) video.play().catch(()=>{});
-    });
-    uiTimer = setTimeout(hideUI, 3000);
 
-    // Buttons
-    const selectBtn   = document.getElementById('selectBtn');
-    const vrBtn       = document.getElementById('vrBtn');
-    const recenterBtn = document.getElementById('recenterBtn');
-    const installBtn  = document.getElementById('installBtn');
-    const fileInput   = document.getElementById('file');
-
-    // Ensure button taps don’t toggle the backdrop (stop bubbling only)
-    ['click','pointerdown','touchstart'].forEach(evt => {
-      for (const el of [selectBtn, vrBtn, recenterBtn, installBtn]) {
-        el.addEventListener(evt, e => { e.stopPropagation(); }, { passive:true });
-      }
-    });
-
-    // File open (Android-friendly)
-    selectBtn.addEventListener('click', () => {
-      fileInput.value = ''; // allow re-select same file
-      if (fileInput.showPicker) { try { fileInput.showPicker(); return; } catch(e){} }
-      fileInput.click();
-    });
-    fileInput.addEventListener('change', (e) => {
-      const file = e.target.files && e.target.files[0];
-      if (!file) return;
-      startVideo(URL.createObjectURL(file));
-    });
-
-    function startVideo(src){
-      video.src = src;
-      video.muted = false;
-      video.play().then(() => {
-        vrBtn.disabled = false;
-      }).catch(() => {
-        video.muted = true;
-        video.play().then(() => { vrBtn.disabled = false; }).catch(()=>{});
-      });
+    function showUI(){
+      ui.classList.remove('hidden');
+      ui.classList.add('visible');
+      clearTimeout(uiTimer);
+      uiTimer = setTimeout(hideUI, 2500);
+    }
+    function hideUI(){
+      ui.classList.remove('visible');
+      ui.classList.add('hidden');
     }
 
-    async function enterCardboard(){
-      await goFullscreen();
-      try { await screen.orientation.lock('landscape'); } catch {}
-      await requestWakeLock();
-      mode = 'stereo';
-      showUI();
-    }
-
-    async function enterWebXR(){
-      try {
-        const supported = await (navigator.xr && navigator.xr.isSessionSupported ? navigator.xr.isSessionSupported('immersive-vr') : Promise.resolve(false));
-        if (!supported) return false;
-        const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor','bounded-floor'] });
-        renderer.xr.setReferenceSpaceType('local');
-        renderer.setAnimationLoop(xrLoop);
-        await renderer.xr.setSession(session);
-        mode = 'webxr';
-        return true;
-      } catch (e) { return false; }
-    }
-
-    async function enterVR(){
-      // Button should always do something
-      const ok = await enterWebXR();
-      if (!ok) await enterCardboard();
-    }
-    vrBtn.addEventListener('click', enterVR);
-    recenterBtn.addEventListener('click', recenter);
-
-    // PWA install: show + auto-prompt on next tap after eligibility
-    let deferredPrompt = null;
-    let autoPrompted = false;
-    window.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      deferredPrompt = e;
-      installBtn.style.display = 'block';
-      // Auto prompt on next user interaction (required gesture)
-      const auto = () => {
-        if (deferredPrompt && !autoPrompted) {
-          autoPrompted = true;
-          deferredPrompt.prompt();
-          deferredPrompt.userChoice.finally(() => {
-            deferredPrompt = null;
-            installBtn.style.display = 'none';
-          });
-        }
-        window.removeEventListener('pointerdown', auto, { capture:true });
-      };
-      window.addEventListener('pointerdown', auto, { once:true, capture:true });
-      if (ui.classList.contains('hidden')) showUI();
-    });
-
-    installBtn.addEventListener('click', async () => {
-      if (!deferredPrompt) return;
-      deferredPrompt.prompt();
-      try { await deferredPrompt.userChoice; } finally {
-        deferredPrompt = null;
-        installBtn.style.display = 'none';
-      }
-    });
-
-    window.addEventListener('appinstalled', () => { installBtn.style.display = 'none'; });
-
-    // DnD + gesture
-    document.addEventListener('dragover', e => { e.preventDefault(); });
-    document.addEventListener('drop', e => {
-      e.preventDefault();
-      const file = e.dataTransfer.files && e.dataTransfer.files[0];
-      if (file && file.type.startsWith('video/')) startVideo(URL.createObjectURL(file));
-    });
-    window.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive:false });
-  })();
-  </script>
-
-  <!-- cache-busted SW registration -->
-  <script>
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', async () => {
-      try {
-        const reg = await navigator.serviceWorker.register('./sw.js?v=11', { scope: './' });
-        if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
-        navigator.serviceWorker.addEventListener('controllerchange', () => {
-          if (!window.__reloaded) { window.__reloaded = true; location.reload(); }
-        });
-      } catch (e) { console.warn('SW registration failed', e); }
-    });
-  }
-  </script>
-</body>
-</html>
+    // Use both pointerdown and click to maximize compatibility
+    function toggleUI(){
+      if (ui.classList.contains('hidd
