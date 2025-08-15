@@ -1,5 +1,5 @@
 // sw.js
-const VERSION = '7'; // bump this for each deploy
+const VERSION = '8'; // bump this for each deploy
 const CACHE = `360-vr-player-cache-v${VERSION}`;
 
 const APP_SHELL = [
@@ -40,6 +40,7 @@ self.addEventListener('fetch', (event) => {
 
   if (req.method !== 'GET') return;
 
+  // Navigations: network-first with offline fallback
   if (req.mode === 'navigate') {
     event.respondWith((async () => {
       try {
@@ -60,10 +61,12 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Don't intercept byte-range/media or blob/filesystem requests
   if (req.headers.has('range') || url.protocol === 'blob:' || url.protocol === 'filesystem:') {
     return;
   }
 
+  // Same-origin static assets: cache-first
   if (url.origin === location.origin) {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE);
@@ -76,6 +79,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // CDN (e.g., jsDelivr): stale-while-revalidate
   if (url.hostname.endsWith('cdn.jsdelivr.net')) {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE);
