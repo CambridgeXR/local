@@ -1,6 +1,6 @@
 // sw.js
-const VERSION = '10'; // bump this for each deploy
-const CACHE = `360-vr-player-cache-v${VERSION}`;
+const VERSION = '11'; // bump this for each deploy
+const CACHE = `vr-offline-cache-v${VERSION}`;
 
 // Precache the app shell (versioned)
 const APP_SHELL = [
@@ -62,7 +62,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Don't intercept byte-range/media or blob/filesystem requests
+  // Don't intercept byte-range/media or blob/filesystem requests (video/local)
   if (req.headers.has('range') || url.protocol === 'blob:' || url.protocol === 'filesystem:') {
     return;
   }
