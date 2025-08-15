@@ -208,4 +208,138 @@
 
     // Use both pointerdown and click to maximize compatibility
     function toggleUI(){
-      if (ui.classList.contains('hidd
+      if (ui.classList.contains('hidden')) showUI(); else hideUI();
+      if (video.src && video.paused) video.play().catch(()=>{});
+    }
+    tapzone.addEventListener('pointerdown', toggleUI, { passive:true });
+    tapzone.addEventListener('click', toggleUI, { passive:true });
+
+    // Start hidden after a short delay
+    uiTimer = setTimeout(hideUI, 3000);
+
+    // Buttons
+    const selectBtn   = document.getElementById('selectBtn');
+    const vrBtn       = document.getElementById('vrBtn');
+    const recenterBtn = document.getElementById('recenterBtn');
+    const installBtn  = document.getElementById('installBtn');
+    const fileInput   = document.getElementById('file');
+
+    // Stop bubbling so a button press doesn't also toggle the backdrop
+    ['pointerdown','click','touchstart'].forEach(evt => {
+      for (const el of [selectBtn, vrBtn, recenterBtn, installBtn]) {
+        el.addEventListener(evt, e => e.stopPropagation(), { passive:true });
+      }
+    });
+
+    // Select simulation: open file picker and enable VR when playing
+    selectBtn.addEventListener('click', () => {
+      fileInput.value = '';
+      if (fileInput.showPicker) { try { fileInput.showPicker(); return; } catch(e){} }
+      fileInput.click();
+    });
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      startVideo(URL.createObjectURL(file));
+    });
+
+    function startVideo(src){
+      video.src = src;
+      video.muted = false;
+      video.play().then(() => {
+        vrBtn.disabled = false;
+      }).catch(() => {
+        video.muted = true;
+        video.play().then(() => { vrBtn.disabled = false; }).catch(()=>{});
+      });
+    }
+
+    // Enter VR: WebXR or Cardboard split-screen + fullscreen + landscape
+    async function enterCardboard(){
+      await goFullscreen();
+      try { await screen.orientation.lock('landscape'); } catch {}
+      await requestWakeLock();
+      mode = 'stereo';
+      showUI();
+    }
+    async function enterWebXR(){
+      try {
+        const supported = await (navigator.xr && navigator.xr.isSessionSupported ? navigator.xr.isSessionSupported('immersive-vr') : Promise.resolve(false));
+        if (!supported) return false;
+        const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor','bounded-floor'] });
+        renderer.xr.setReferenceSpaceType('local');
+        renderer.setAnimationLoop(xrLoop);
+        await renderer.xr.setSession(session);
+        mode = 'webxr';
+        return true;
+      } catch (e) { return false; }
+    }
+    async function enterVR(){
+      const ok = await enterWebXR();
+      if (!ok) await enterCardboard();
+    }
+    vrBtn.addEventListener('click', enterVR);
+
+    // Recenter
+    recenterBtn.addEventListener('click', recenter);
+
+    // PWA install: show + auto-prompt on next tap after eligibility
+    let deferredPrompt = null;
+    let autoPrompted = false;
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+      installBtn.style.display = 'block';
+      // Auto prompt on next user interaction (required gesture)
+      const auto = () => {
+        if (deferredPrompt && !autoPrompted) {
+          autoPrompted = true;
+          deferredPrompt.prompt();
+          deferredPrompt.userChoice.finally(() => {
+            deferredPrompt = null;
+            installBtn.style.display = 'none';
+          });
+        }
+        window.removeEventListener('pointerdown', auto, { capture:true });
+      };
+      window.addEventListener('pointerdown', auto, { once:true, capture:true });
+      if (ui.classList.contains('hidden')) showUI();
+    });
+
+    installBtn.addEventListener('click', async () => {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      try { await deferredPrompt.userChoice; } finally {
+        deferredPrompt = null;
+        installBtn.style.display = 'none';
+      }
+    });
+    window.addEventListener('appinstalled', () => { installBtn.style.display = 'none'; });
+
+    // Drag & drop + gesture guard
+    document.addEventListener('dragover', e => { e.preventDefault(); });
+    document.addEventListener('drop', e => {
+      e.preventDefault();
+      const file = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file && file.type.startsWith('video/')) startVideo(URL.createObjectURL(file));
+    });
+    window.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive:false });
+  })();
+  </script>
+
+  <!-- cache-busted SW registration -->
+  <script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', async () => {
+      try {
+        const reg = await navigator.serviceWorker.register('./sw.js?v=12', { scope: './' });
+        if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
+        navigator.serviceWorker.addEventListener('controllerchange', () => {
+          if (!window.__reloaded) { window.__reloaded = true; location.reload(); }
+        });
+      } catch (e) { console.warn('SW registration failed', e); }
+    });
+  }
+  </script>
+</body>
+</html>
