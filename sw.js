@@ -1,7 +1,8 @@
 // sw.js
-const VERSION = '9'; // bump this for each deploy
+const VERSION = '10'; // bump this for each deploy
 const CACHE = `360-vr-player-cache-v${VERSION}`;
 
+// Precache the app shell (versioned)
 const APP_SHELL = [
   './',
   './?source=pwa',
