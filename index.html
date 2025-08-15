@@ -6,10 +6,9 @@
   <meta name="theme-color" content="#0b0f19" />
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="apple-touch-icon" href="./icons/icon-192.png?v=6">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png?v=7">
   <title>XR Viewer</title>
-  <!-- cache-busted manifest -->
-  <link rel="manifest" href="./manifest.json?v=6" />
+  <link rel="manifest" href="./manifest.json?v=7" />
   <style>
     :root { --bg:#0b0f19; --fg:#e5e7eb; --muted:#9aa3b2; }
     html,body {
@@ -23,13 +22,10 @@
     #app { position:fixed; inset:0; overflow:hidden; }
     canvas { display:block; width:100%; height:100%; }
 
-    /* Tap target to toggle controls — sits under UI */
-    #tapzone { position:fixed; inset:0; background:transparent; z-index:1; }
-
-    /* Minimal overlay UI — must receive pointer events and sit above tapzone */
-    .ui { position:fixed; inset:0; display:grid; place-items:center; z-index:2; }
-    .ui-inner { display:flex; flex-direction:column; gap:.75rem; align-items:center; }
-    button { appearance:none; border:0; padding:.9rem 1.1rem; border-radius:1rem; background:#121a2b; color:var(--fg); font-weight:600; letter-spacing:.2px; box-shadow:0 6px 24px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05); width:200px; }
+    /* Minimal overlay UI */
+    .ui { position:fixed; inset:0; display:grid; place-items:center; pointer-events:none; }
+    .ui-inner { pointer-events:auto; display:flex; flex-direction:column; gap:.75rem; align-items:center; }
+    button { appearance:none; border:0; padding:.9rem 1.1rem; border-radius:1rem; background:#121a2b; color:var(--fg); font-weight:600; letter-spacing:.2px; box-shadow:0 6px 24px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05); width:200px; cursor:pointer; }
     button:active { transform: translateY(1px); }
     .title { font-style: italic; color: var(--muted); font-size:.9rem; margin-top:.25rem; }
 
@@ -37,6 +33,8 @@
     .hidden { opacity:0; transform: translateY(8px); pointer-events:none; }
     .visible { opacity:1; transform: translateY(0); }
     .fade { transition: opacity .25s ease, transform .25s ease; }
+
+    #tapzone { position:fixed; inset:0; background:transparent; }
   </style>
 </head>
 <body>
@@ -49,11 +47,11 @@
       <button id="selectBtn">Select simulation</button>
       <button id="vrBtn" disabled>Enter VR</button>
       <button id="recenterBtn">Recenter</button>
+      <button id="installBtn" style="display:none;">Install App</button>
       <div class="title">Brought to you by Cambridge XR</div>
     </div>
   </div>
 
-  <!-- Hidden input for local video selection -->
   <input id="file" type="file" accept="video/*" style="display:none" />
 
   <!-- three.js core -->
@@ -63,33 +61,17 @@
   <script>
   (function(){
     const app = document.getElementById('app');
-
-    // Power helpers: wake lock + robust fullscreen
     let wakeLock = null;
-    async function requestWakeLock(){
-      try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
-    }
-    document.addEventListener('visibilitychange', async () => {
-      if (wakeLock !== null && document.visibilityState === 'visible') {
-        try { wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
-      }
-    });
-    async function goFullscreen(){
-      const el = document.documentElement;
-      try {
-        if (el.requestFullscreen) await el.requestFullscreen();
-        else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
-      } catch(e){}
-    }
+    async function requestWakeLock(){ try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){} }
+    document.addEventListener('visibilitychange', async () => { if (wakeLock !== null && document.visibilityState === 'visible') { try { wakeLock = await navigator.wakeLock.request('screen'); } catch(e){} } });
+    async function goFullscreen(){ const el = document.documentElement; try { if (el.requestFullscreen) await el.requestFullscreen(); else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen(); } catch(e){} }
 
-    // Create video element
     const video = document.createElement('video');
     video.setAttribute('playsinline', '');
     video.loop = true;
     video.preload = 'metadata';
     video.crossOrigin = 'anonymous';
 
-    // Scene
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 0, 0);
@@ -97,10 +79,9 @@
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.xr.enabled = true; // allow WebXR if available
+    renderer.xr.enabled = true;
     app.appendChild(renderer.domElement);
 
-    // Sphere for 360 video (inside-out)
     let sphere, material, texture;
     function buildSphere() {
       const geometry = new THREE.SphereGeometry(500, 64, 64);
@@ -113,22 +94,19 @@
     }
     buildSphere();
 
-    // Device orientation controls (rotation only)
     const controls = new THREE.DeviceOrientationControls(camera, true);
     controls.connect();
 
-    // ---- State ----
-    let yawOffset = 0;           // applied in mono/stereo modes
-    let mode = 'mono';           // 'mono' | 'stereo' | 'webxr'
-    const SMOOTH_ALPHA = 0.12;   // smoothing per frame
+    let yawOffset = 0;
+    let mode = 'mono';
+    const SMOOTH_ALPHA = 0.12;
     const smoothedQuat = new THREE.Quaternion().copy(camera.quaternion);
 
-    // Recenter
     function recenter() {
       if (mode === 'webxr') {
         const xrCam = renderer.xr.getCamera();
         const euler = new THREE.Euler().setFromQuaternion(xrCam.quaternion, 'YXZ');
-        sphere.rotation.y = -euler.y; // rotate world to face forward
+        sphere.rotation.y = -euler.y;
       } else {
         const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
         yawOffset = euler.y;
@@ -153,10 +131,8 @@
       const targetQuat = new THREE.Quaternion().setFromEuler(euler);
       smoothedQuat.slerp(targetQuat, SMOOTH_ALPHA);
       camera.quaternion.copy(smoothedQuat);
-
       const w = renderer.domElement.width;
       const h = renderer.domElement.height;
-
       renderer.setScissorTest(true);
       renderer.setViewport(0, 0, w/2, h);
       renderer.setScissor(0, 0, w/2, h);
@@ -170,7 +146,7 @@
     const xrLoop = () => { renderer.render(scene, camera); };
 
     function animate(){
-      if (mode === 'webxr') return; // XR uses setAnimationLoop
+      if (mode === 'webxr') return;
       requestAnimationFrame(animate);
       if (mode === 'stereo') renderStereo(); else renderMono();
     }
@@ -183,54 +159,27 @@
     }
     window.addEventListener('resize', onResize);
 
-    // UI: auto-hide + toggle on tap
     const ui = document.getElementById('ui');
     const tapzone = document.getElementById('tapzone');
     let uiTimer = null;
-    const showUI = () => {
-      ui.classList.remove('hidden');
-      ui.classList.add('visible');
-      clearTimeout(uiTimer);
-      uiTimer = setTimeout(() => hideUI(), 2500);
-    };
-    const hideUI = () => {
-      ui.classList.remove('visible');
-      ui.classList.add('hidden');
-    };
-    tapzone.addEventListener('click', () => {
-      const isHidden = ui.classList.contains('hidden');
-      if (isHidden) showUI(); else hideUI();
-      if (video.src && video.paused) video.play().catch(()=>{});
-    });
+    const showUI = () => { ui.classList.remove('hidden'); ui.classList.add('visible'); clearTimeout(uiTimer); uiTimer = setTimeout(() => hideUI(), 2500); };
+    const hideUI = () => { ui.classList.remove('visible'); ui.classList.add('hidden'); };
+    tapzone.addEventListener('click', () => { const isHidden = ui.classList.contains('hidden'); if (isHidden) showUI(); else hideUI(); if (video.src && video.paused) video.play().catch(()=>{}); });
     uiTimer = setTimeout(() => hideUI(), 3000);
 
-    // Buttons
     const selectBtn = document.getElementById('selectBtn');
     const vrBtn = document.getElementById('vrBtn');
     const recenterBtn = document.getElementById('recenterBtn');
     const fileInput = document.getElementById('file');
-
-    // Stop button taps from bubbling to the tapzone
-    ['click','pointerdown','touchstart'].forEach(evt => {
-      selectBtn.addEventListener(evt, e => e.stopPropagation());
-      vrBtn.addEventListener(evt, e => e.stopPropagation());
-      recenterBtn.addEventListener(evt, e => e.stopPropagation());
-    });
+    const installBtn = document.getElementById('installBtn');
 
     selectBtn.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', (e) => {
-      const file = e.target.files && e.target.files[0];
-      if (!file) return;
-      const url = URL.createObjectURL(file);
-      startVideo(url);
-    });
+    fileInput.addEventListener('change', (e) => { const file = e.target.files && e.target.files[0]; if (!file) return; const url = URL.createObjectURL(file); startVideo(url); });
 
     function startVideo(src){
       video.src = src;
       video.muted = false;
-      video.play().then(() => {
-        vrBtn.disabled = false;
-      }).catch(() => {
+      video.play().then(() => { vrBtn.disabled = false; }).catch(() => {
         video.muted = true;
         video.play().then(() => { vrBtn.disabled = false; }).catch(()=>{});
       });
@@ -265,28 +214,37 @@
       if (!ok) await enterCardboard();
     }
 
-    document.getElementById('vrBtn').addEventListener('click', enterVR);
+    vrBtn.addEventListener('click', enterVR);
     recenterBtn.addEventListener('click', recenter);
 
-    // Drag & drop
     document.addEventListener('dragover', e => { e.preventDefault(); });
-    document.addEventListener('drop', e => {
+    document.addEventListener('drop', e => { e.preventDefault(); const file = e.dataTransfer.files && e.dataTransfer.files[0]; if (file && file.type.startsWith('video/')) startVideo(URL.createObjectURL(file)); });
+
+    window.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive:false });
+
+    // PWA Install Button Logic
+    let deferredPrompt;
+    window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
-      const file = e.dataTransfer.files && e.dataTransfer.files[0];
-      if (file && file.type.startsWith('video/')) startVideo(URL.createObjectURL(file));
+      deferredPrompt = e;
+      installBtn.style.display = 'block';
+    });
+    installBtn.addEventListener('click', async () => {
+      if (!deferredPrompt) return;
+      deferredPrompt.prompt();
+      const choice = await deferredPrompt.userChoice;
+      deferredPrompt = null;
+      installBtn.style.display = 'none';
     });
 
-    // Prevent pinch-zoom
-    window.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive:false });
   })();
   </script>
 
-  <!-- cache-busted SW registration -->
   <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', async () => {
       try {
-        const reg = await navigator.serviceWorker.register('./sw.js?v=6', { scope: './' });
+        const reg = await navigator.serviceWorker.register('./sw.js?v=7', { scope: './' });
         if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
         navigator.serviceWorker.addEventListener('controllerchange', () => {
           if (!window.__reloaded) { window.__reloaded = true; location.reload(); }
