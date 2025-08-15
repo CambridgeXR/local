@@ -2,516 +2,274 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>360 VR Player (Stabilized)</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
-  <meta name="theme-color" content="#000000"/>
-  <meta name="description" content="Lightweight 360° VR video player for mobile (Cardboard-style).">
-  <link rel="manifest" href="manifest.json">
-  <link rel="icon" sizes="192x192" href="icons/icon-192.png">
-  <link rel="apple-touch-icon" sizes="192x192" href="icons/icon-192.png">
-  <link rel="apple-touch-icon" sizes="512x512" href="icons/icon-512.png">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no" />
+  <meta name="theme-color" content="#0b0f19" />
+  <title>XR Viewer</title>
+  <link rel="manifest" href="./manifest.json" />
   <style>
-    :root { --ui-fade-ms: 4000; }
-    html, body { margin:0; padding:0; height:100%; background:#000; color:#fff;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-      overscroll-behavior: contain; touch-action: manipulation; }
-    canvas { display:block; width:100vw; height:100vh; }
-    #ui { position:fixed; inset:0; pointer-events:none; }
-    #panelWrap { position:absolute; inset:0; display:grid; place-items:center; pointer-events:none; }
-    .panel { pointer-events:auto; display:grid; gap:10px; width:min(92vw,520px); text-align:center; transition:opacity .35s ease; }
-    #footer { position:fixed; left:50%; bottom:10px; transform:translateX(-50%);
-      font-size:.8rem; font-style:italic; opacity:.85; transition:opacity .35s ease; pointer-events:none; user-select:none; }
-    .faded { opacity:0; }
-    .hidden { display:none; }
-    .btn { appearance:none; border:none; outline:none; padding:14px 16px; border-radius:12px;
-      font-weight:600; font-size:1.05rem; background:#1a73e8; color:#fff; box-shadow:0 6px 18px rgba(26,115,232,.35);
-      cursor:pointer; transition:transform .06s ease, filter .2s ease, opacity .2s ease; width:100%; }
-    .btn.secondary { background:#2b2b2b; box-shadow:0 6px 18px rgba(0,0,0,.35); }
-    .btn[disabled]{ opacity:.5; cursor:not-allowed; }
-    input[type=file]{ display:none; }
-    .row { display:flex; gap:10px; }
-    .row > .btn { flex:1; }
-    #toast { position:fixed; bottom:56px; left:50%; transform:translateX(-50%);
-      background:rgba(0,0,0,.65); color:#fff; font-size:.95rem; padding:10px 12px; border-radius:10px;
-      opacity:0; transition:opacity .25s ease; pointer-events:none; }
-    #toast.show { opacity:1; }
-    #status { font-size:.9rem; opacity:.9; }
-    #status .dot { display:inline-block; width:.6rem; height:.6rem; border-radius:50%; margin-right:.4rem; background:#777; }
-    #status.ok .dot { background:#1ec362; }
-    #status.warn .dot { background:#ffaa2c; }
-    #status.err .dot { background:#ff4747; }
-    #title { margin:0; font-size:1.4rem; font-weight:700; letter-spacing:.2px; }
-    @media (prefers-reduced-motion: reduce) { .panel, #footer, #toast { transition:none; } }
+    :root { --bg:#0b0f19; --fg:#e5e7eb; --muted:#9aa3b2; }
+    html,body { height:100%; margin:0; background:var(--bg); color:var(--fg); font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif; }
+    #app { position:fixed; inset:0; overflow:hidden; }
+    canvas { display:block; width:100%; height:100%; }
+
+    /* Minimal overlay UI */
+    .ui { position:fixed; inset:0; display:grid; place-items:center; pointer-events:none; }
+    .ui-inner { pointer-events:auto; display:flex; flex-direction:column; gap:.75rem; align-items:center; }
+    button { appearance:none; border:0; padding:.9rem 1.1rem; border-radius:1rem; background:#121a2b; color:var(--fg); font-weight:600; letter-spacing:.2px; box-shadow:0 6px 24px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.05); width:200px; }
+    button:active { transform: translateY(1px); }
+    .title { font-style: italic; color: var(--muted); font-size:.9rem; margin-top:.25rem; }
+
+    /* Show/Hide with fade */
+    .hidden { opacity:0; transform: translateY(8px); pointer-events:none; }
+    .visible { opacity:1; transform: translateY(0); }
+    .fade { transition: opacity .25s ease, transform .25s ease; }
+
+    /* Tap target to toggle controls */
+    #tapzone { position:fixed; inset:0; background:transparent; }
   </style>
 </head>
 <body>
-  <canvas id="glcanvas" aria-label="360 VR Canvas"></canvas>
-  <video id="video360" playsinline webkit-playsinline preload="metadata" loop crossorigin="anonymous" style="display:none"></video>
+  <div id="app"></div>
+  <div id="tapzone" aria-label="toggle controls"></div>
 
-  <div id="ui" aria-live="polite">
-    <div id="panelWrap">
-      <div id="panel" class="panel">
-        <h1 id="title">360° VR Player</h1>
-        <div id="status"><span class="dot"></span><span id="statusText">Motion: idle</span></div>
-        <div class="row">
-          <button id="selectBtn" class="btn secondary" type="button">Select simulation</button>
-          <input id="fileInput" type="file" accept="video/*" />
-          <button id="recenterBtn" class="btn secondary" type="button">Recenter</button>
-        </div>
-        <button id="vrBtn" class="btn" type="button" disabled>Enter VR</button>
-      </div>
+  <!-- Minimal UI -->
+  <div class="ui">
+    <div id="ui" class="ui-inner fade visible">
+      <button id="selectBtn">Select simulation</button>
+      <button id="vrBtn" disabled>Enter VR</button>
+      <button id="recenterBtn">Recenter</button>
+      <div class="title">Brought to you by Cambridge XR</div>
     </div>
-    <div id="footer">Brought to you by Cambridge XR</div>
   </div>
 
-  <div id="toast" role="status" aria-live="polite"></div>
+  <!-- Hidden input for local video selection -->
+  <input id="file" type="file" accept="video/*" style="display:none" />
+
+  <!-- three.js core -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.157.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.157.0/examples/js/controls/DeviceOrientationControls.js"></script>
 
   <script>
-  (() => {
-    // ========= UI helpers =========
-    const qs = (s)=>document.querySelector(s);
-    const ui = qs('#ui'), panel = qs('#panel'), footer = qs('#footer'), toast = qs('#toast');
-    const statusEl = qs('#status'); const statusText = qs('#statusText');
-    let hideUITimer = null; const UI_HIDE_DELAY = 4000;
-    function setStatus(kind, text){
-      statusEl.classList.remove('ok','warn','err');
-      if (kind) statusEl.classList.add(kind);
-      statusText.textContent = text;
-    }
-    function showToast(msg, ms = 1600){
-      toast.textContent = msg; toast.classList.add('show');
-      clearTimeout(showToast._t); showToast._t = setTimeout(()=>toast.classList.remove('show'), ms);
-    }
-    function fadeUI(){ panel.classList.add('faded'); footer.classList.add('faded'); }
-    function showUI(){ clearTimeout(hideUITimer); panel.classList.remove('faded'); footer.classList.remove('faded'); hideUITimer = setTimeout(fadeUI, UI_HIDE_DELAY); }
-    showUI();
-    addEventListener('pointerdown', () => { showUI(); if (vrActive) requestRecenterSoft(); }, {passive:true});
+  (function(){
+    const app = document.getElementById('app');
 
-    // ========= Video handling =========
-    const fileInput = qs('#fileInput'), selectBtn = qs('#selectBtn'), vrBtn = qs('#vrBtn');
-    const recenterBtn = qs('#recenterBtn');
-    const video = qs('#video360');
-    let objectURL = null;
-    selectBtn.addEventListener('click', () => fileInput.click());
-    fileInput.addEventListener('change', async (ev) => {
-      const file = ev.target.files && ev.target.files[0];
-      if (!file) return;
-      try {
-        if (objectURL) URL.revokeObjectURL(objectURL);
-        objectURL = URL.createObjectURL(file);
-        video.src = objectURL; video.loop = true; video.playsInline = true;
-        video.setAttribute('playsinline',''); video.setAttribute('webkit-playsinline','');
-        await ensureVideoPlays();
-        vrBtn.disabled = false;
-        showToast('Simulation loaded.');
-        showUI();
-      } catch (err) { console.error(err); showToast('Could not load video.'); }
-    });
-    async function ensureVideoPlays(){ try { video.muted = false; await video.play(); } catch (e) {} }
-
-    // ========= Power helpers =========
+    // Power helpers: wake lock + robust fullscreen
     let wakeLock = null;
-    async function requestWakeLock(){ try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){} }
+    async function requestWakeLock(){
+      try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
+    }
     document.addEventListener('visibilitychange', async () => {
       if (wakeLock !== null && document.visibilityState === 'visible') {
-        try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+        try { wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
       }
     });
-    async function lockLandscape(){ try { if (screen.orientation?.lock) await screen.orientation.lock('landscape'); } catch(e){} }
     async function goFullscreen(){
+      const el = document.documentElement;
       try {
-        const el = document.documentElement;
         if (el.requestFullscreen) await el.requestFullscreen();
         else if (el.webkitRequestFullscreen) await el.webkitRequestFullscreen();
-      } catch (e) {}
-    }
-
-    // ========= Math / Quat =========
-    function qIdentity(){ return new Float32Array([0,0,0,1]); }
-    function qNormalize(q){ const s=1/Math.hypot(q[0],q[1],q[2],q[3]); q[0]*=s;q[1]*=s;q[2]*=s;q[3]*=s; return q; }
-    function qMul(a,b){
-      const ax=a[0],ay=a[1],az=a[2],aw=a[3]; const bx=b[0],by=b[1],bz=b[2],bw=b[3];
-      return new Float32Array([ aw*bx + ax*bw + ay*bz - az*by, aw*by - ax*bz + ay*bw + az*bx, aw*bz + ax*by - ay*bx + az*bw, aw*bw - ax*bx - ay*by - az*bz ]);
-    }
-    function qFromAxisAngle(x,y,z,angle){ const h=angle*0.5,s=Math.sin(h); return new Float32Array([x*s,y*s,z*s,Math.cos(h)]); }
-    function qRotateVector(q,v){ const x=v[0],y=v[1],z=v[2]; const qx=q[0],qy=q[1],qz=q[2],qw=q[3];
-      const tx=2*(qy*z - qz*y), ty=2*(qz*x - qx*z), tz=2*(qx*y - qy*x);
-      return new Float32Array([ x + qw*tx + (qy*tz - qz*ty), y + qw*ty + (qz*tx - qx*tz), z + qw*tz + (qx*ty - qy*tx) ]);
-    }
-    function qToMat4(q){ const x=q[0],y=q[1],z=q[2],w=q[3]; const x2=x+x,y2=y+y,z2=z+z; const xx=x*x2,xy=x*y2,xz=x*z2; const yy=y*y2,yz=y*z2,zz=z*z2; const wx=w*x2,wy=w*y2,wz=w*z2;
-      return new Float32Array([ 1-(yy+zz), xy+wz, xz-wy, 0, xy-wz, 1-(xx+zz), yz+wx, 0, xz+wy, yz-wx, 1-(xx+yy), 0, 0,0,0,1 ]);
-    }
-    function qSlerp(a,b,t){
-      let ax=a[0],ay=a[1],az=a[2],aw=a[3]; let bx=b[0],by=b[1],bz=b[2],bw=b[3];
-      let cos = ax*bx + ay*by + az*bz + aw*bw;
-      if (cos < 0) { bx=-bx; by=-by; bz=-bz; bw=-bw; cos = -cos; }
-      if (cos > 0.9995){ // linear fallback
-        const k0=1-t, k1=t; return qNormalize(new Float32Array([k0*ax + k1*bx, k0*ay + k1*by, k0*az + k1*bz, k0*aw + k1*bw]));
-      }
-      const sin = Math.sqrt(1 - cos*cos); const ang = Math.atan2(sin, cos);
-      const k0 = Math.sin((1-t)*ang)/sin; const k1 = Math.sin(t*ang)/sin;
-      return new Float32Array([ k0*ax + k1*bx, k0*ay + k1*by, k0*az + k1*bz, k0*aw + k1*bw ]);
-    }
-
-    // ========= Orientation state =========
-    let qOrient = qIdentity();    // device orientation estimate (gyro integrated)
-    let qView = qIdentity();      // smoothed view quaternion
-    let qScreen = qIdentity();    // screen orientation compensation
-    let yawOffset = 0;
-    let vrActive = false;
-
-    function computeQScreen(){
-      let angle = 0;
-      if (screen.orientation && typeof screen.orientation.angle === 'number') angle = screen.orientation.angle;
-      else if (typeof window.orientation === 'number') angle = window.orientation;
-      const rad = (angle||0) * Math.PI/180;
-      // -Z forward, Y up in our world: apply -90° X to map to camera-style
-      const qA = qFromAxisAngle(0,0,1,-rad);
-      const qB = qFromAxisAngle(1,0,0, -Math.PI/2);
-      qScreen = qMul(qA, qB);
-    }
-    computeQScreen();
-    addEventListener('orientationchange', computeQScreen);
-    screen.orientation?.addEventListener('change', computeQScreen);
-
-    function requestRecenter(){
-      const qWorld = qMul(qScreen, qOrient);
-      const fwd = qRotateVector(qWorld, [0,0,-1]);
-      const yaw = Math.atan2(fwd[0], -fwd[2]);
-      yawOffset = -yaw;
-      showToast('Recentered');
-    }
-    function requestRecenterSoft(){
-      // small yaw snap to reduce micro drift during tap
-      const qWorld = qMul(qScreen, qOrient);
-      const fwd = qRotateVector(qWorld, [0,0,-1]);
-      const yaw = Math.atan2(fwd[0], -fwd[2]);
-      const delta = -yaw - yawOffset;
-      yawOffset += delta * 0.25;
-    }
-
-    // ========= Sensors =========
-    let sensorMode = 'idle'; // 'generic' | 'devicemotion' | 'deviceorientation'
-    let haveStream = false;
-    async function requestIOSPermissionIfNeeded(){
-      try {
-        if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-          const res = await DeviceMotionEvent.requestPermission(); return res === 'granted';
-        }
-        if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-          const res = await DeviceOrientationEvent.requestPermission(); return res === 'granted';
-        }
       } catch(e){}
-      return true;
-    }
-    let genericSensor = null;
-
-    function stopSensors(){
-      try { if (genericSensor) { genericSensor.stop(); genericSensor = null; } } catch(e){}
-      window.removeEventListener('devicemotion', devicemotionHandler, {passive:true});
-      window.removeEventListener('deviceorientation', deviceorientationHandler, {passive:true});
-      sensorMode = 'idle'; haveStream = false;
-      setStatus('', 'Motion: idle');
     }
 
-    function startGenericSensor(){
-      if (!('AbsoluteOrientationSensor' in window)) return false;
+    // Create video element
+    const video = document.createElement('video');
+    video.setAttribute('playsinline', '');
+    video.loop = true;
+    video.preload = 'metadata';
+    video.crossOrigin = 'anonymous';
+
+    // Scene
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    camera.position.set(0, 0, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.xr.enabled = true; // allow WebXR if available
+    app.appendChild(renderer.domElement);
+
+    // Create sphere for 360 video (inside-out)
+    let sphere, material, texture;
+    function buildSphere() {
+      const geometry = new THREE.SphereGeometry(500, 64, 64);
+      geometry.scale(-1, 1, 1); // invert to view from inside
+      texture = new THREE.VideoTexture(video);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      material = new THREE.MeshBasicMaterial({ map: texture });
+      sphere = new THREE.Mesh(geometry, material);
+      scene.add(sphere);
+    }
+    buildSphere();
+
+    // Device orientation controls (rotation only)
+    const controls = new THREE.DeviceOrientationControls(camera, true);
+    controls.connect();
+
+    // ---- State ----
+    let yawOffset = 0;        // applied in mono/stereo modes
+    let mode = 'mono';        // 'mono' | 'stereo' | 'webxr'
+    // smoothing for reduced jitter
+    const SMOOTH_ALPHA = 0.12; // 0..1 per frame
+    const smoothedQuat = new THREE.Quaternion();
+    smoothedQuat.copy(camera.quaternion);
+
+    // Recenter by zeroing yaw offset (mono/stereo) or rotating world (XR)
+    function recenter() {
+      if (mode === 'webxr') {
+        const xrCam = renderer.xr.getCamera();
+        const euler = new THREE.Euler().setFromQuaternion(xrCam.quaternion, 'YXZ');
+        sphere.rotation.y = -euler.y; // rotate world to face forward
+      } else {
+        const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+        yawOffset = euler.y; // subtract in render loop
+      }
+    }
+
+    // ---- Rendering ----
+    function renderMono(){
+      controls.update();
+      const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+      euler.y -= yawOffset;
+      const targetQuat = new THREE.Quaternion().setFromEuler(euler);
+      smoothedQuat.slerp(targetQuat, SMOOTH_ALPHA);
+      camera.quaternion.copy(smoothedQuat);
+      renderer.setScissorTest(false);
+      renderer.render(scene, camera);
+    }
+
+    function renderStereo(){
+      controls.update();
+      const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+      euler.y -= yawOffset;
+      const targetQuat = new THREE.Quaternion().setFromEuler(euler);
+      smoothedQuat.slerp(targetQuat, SMOOTH_ALPHA);
+      camera.quaternion.copy(smoothedQuat);
+
+      const w = renderer.domElement.width;
+      const h = renderer.domElement.height;
+
+      renderer.setScissorTest(true);
+      // Left eye
+      renderer.setViewport(0, 0, w/2, h);
+      renderer.setScissor(0, 0, w/2, h);
+      renderer.render(scene, camera);
+      // Right eye
+      renderer.setViewport(w/2, 0, w/2, h);
+      renderer.setScissor(w/2, 0, w/2, h);
+      renderer.render(scene, camera);
+      renderer.setScissorTest(false);
+    }
+
+    // WebXR loop (phone + supported browser)
+    const xrLoop = () => { renderer.render(scene, camera); };
+
+    function animate(){
+      if (mode === 'webxr') return; // XR uses setAnimationLoop
+      requestAnimationFrame(animate);
+      if (mode === 'stereo') renderStereo(); else renderMono();
+    }
+    animate();
+
+    // Resize
+    function onResize(){
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+    window.addEventListener('resize', onResize);
+
+    // UI logic: auto-hide after tap and toggle on any screen tap
+    const ui = document.getElementById('ui');
+    const tapzone = document.getElementById('tapzone');
+    let uiTimer = null;
+    const showUI = () => {
+      ui.classList.remove('hidden');
+      ui.classList.add('visible');
+      clearTimeout(uiTimer);
+      uiTimer = setTimeout(() => hideUI(), 2500);
+    };
+    const hideUI = () => {
+      ui.classList.remove('visible');
+      ui.classList.add('hidden');
+    };
+    tapzone.addEventListener('click', () => {
+      const isHidden = ui.classList.contains('hidden');
+      if (isHidden) showUI(); else hideUI();
+      if (video.src && video.paused) video.play().catch(()=>{});
+    });
+    uiTimer = setTimeout(() => hideUI(), 3000);
+
+    // Buttons
+    const selectBtn = document.getElementById('selectBtn');
+    const vrBtn = document.getElementById('vrBtn');
+    const recenterBtn = document.getElementById('recenterBtn');
+    const fileInput = document.getElementById('file');
+
+    selectBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const url = URL.createObjectURL(file);
+      startVideo(url);
+    });
+
+    function startVideo(src){
+      video.src = src;
+      video.muted = false;
+      video.play().then(() => {
+        vrBtn.disabled = false;
+      }).catch(() => {
+        // Autoplay with sound may be blocked; try muted
+        video.muted = true;
+        video.play().then(() => { vrBtn.disabled = false; }).catch(()=>{});
+      });
+    }
+
+    async function enterCardboard(){
+      await goFullscreen();
+      try { await screen.orientation.lock('landscape'); } catch {}
+      await requestWakeLock();
+      mode = 'stereo';
+      showUI();
+    }
+
+    async function enterWebXR(){
       try {
-        const sensor = new AbsoluteOrientationSensor({ frequency: 60, referenceFrame: 'device' });
-        sensor.addEventListener('error', ev => {
-          console.warn('AbsoluteOrientationSensor error', ev.error?.name, ev.error);
-          setStatus('warn', 'Motion: blocked by settings');
-        });
-        sensor.addEventListener('reading', () => {
-          const q = sensor.quaternion;
-          if (q) { qOrient = qNormalize(new Float32Array([q[0],q[1],q[2],q[3]])); haveStream = true; }
-        });
-        sensor.start();
-        genericSensor = sensor;
-        sensorMode = 'generic';
-        setStatus('ok', 'Motion: active (OrientationSensor)');
+        const supported = await (navigator.xr && navigator.xr.isSessionSupported ? navigator.xr.isSessionSupported('immersive-vr') : Promise.resolve(false));
+        if (!supported) return false;
+        const session = await navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor','bounded-floor'] });
+        renderer.xr.setReferenceSpaceType('local');
+        renderer.setAnimationLoop(xrLoop);
+        await renderer.xr.setSession(session);
+        mode = 'webxr';
         return true;
       } catch (e) {
-        console.warn('AbsoluteOrientationSensor not available', e);
+        console.warn('WebXR failed, falling back to stereo', e);
         return false;
       }
     }
 
-    // ---- Devicemotion with bias compensation & complementary filter ----
-    let lastGyroTs = null;
-    let gyroBias = [0,0,0]; // rad/s
-    const BIAS_ALPHA = 0.02; // slow bias learning when still
-    const STILL_RATE = 0.03; // rad/s threshold to consider still
-    const GRAVITY_BLEND_BASE = 0.02; // base blend to gravity (reduce drift)
-    function devicemotionHandler(e){
-      const rr = e.rotationRate; const ts = e.timeStamp;
-      if (rr && ts != null){
-        let dt = 0; if (lastGyroTs != null) dt = Math.max(0, Math.min(0.05, (ts - lastGyroTs)/1000)); // clamp dt to 50ms
-        lastGyroTs = ts;
-        // Map beta->x, gamma->y, alpha->z (deg/s) to rad/s
-        let wx=(rr.beta||0)*Math.PI/180, wy=(rr.gamma||0)*Math.PI/180, wz=(rr.alpha||0)*Math.PI/180;
-        // Bias learning when relatively still
-        const rateMag = Math.hypot(wx,wy,wz);
-        if (rateMag < STILL_RATE){
-          gyroBias[0] = gyroBias[0] + BIAS_ALPHA*(wx - gyroBias[0]);
-          gyroBias[1] = gyroBias[1] + BIAS_ALPHA*(wy - gyroBias[1]);
-          gyroBias[2] = gyroBias[2] + BIAS_ALPHA*(wz - gyroBias[2]);
-        }
-        wx -= gyroBias[0]; wy -= gyroBias[1]; wz -= gyroBias[2];
-
-        if (dt > 0){
-          const mag = Math.hypot(wx,wy,wz);
-          if (mag > 0){
-            const dq = qFromAxisAngle(wx/mag, wy/mag, wz/mag, mag*dt);
-            qOrient = qNormalize(qMul(qOrient, dq));
-            haveStream = true;
-          }
-        }
-      }
-      // Complementary gravity correction (roll/pitch)
-      const g = e.accelerationIncludingGravity;
-      if (g){
-        const gx=g.x||0, gy=g.y||0, gz=g.z||0; const gm = Math.hypot(gx,gy,gz);
-        if (gm > 7 && gm < 13){
-          const gWorld = qRotateVector(qScreen, [gx,gy,gz]);
-          const qWorld = qMul(qScreen, qOrient);
-          const up = qRotateVector(qWorld, [0,1,0]);
-          const targetUp = new Float32Array([-gWorld[0]/gm, -gWorld[1]/gm, -gWorld[2]/gm]);
-          const cx = up[1]*targetUp[2] - up[2]*targetUp[1];
-          const cy = up[2]*targetUp[0] - up[0]*targetUp[2];
-          const cz = up[0]*targetUp[1] - up[1]*targetUp[0];
-          const dot = Math.max(-1, Math.min(1, up[0]*targetUp[0] + up[1]*targetUp[1] + up[2]*targetUp[2]));
-          const angle = Math.acos(dot);
-          if (angle > 1e-4){
-            const axisMag = Math.hypot(cx,cy,cz) || 1;
-            const axis = [cx/axisMag, cy/axisMag, cz/axisMag];
-            // Adaptive blend: less correction when rotating fast
-            const blend = GRAVITY_BLEND_BASE * (1 / (1 + Math.exp((Math.hypot(rr?.beta||0, rr?.gamma||0, rr?.alpha||0) - 45)/10))); // 0..~0.02
-            const qCorr = qFromAxisAngle(axis[0], axis[1], axis[2], angle * (blend||GRAVITY_BLEND_BASE));
-            qOrient = qNormalize(qMul(qCorr, qOrient));
-          }
-        }
-      }
-    }
-
-    // ---- DeviceOrientation fallback (Euler -> quat) ----
-    function eulerToQuat(alpha, beta, gamma){
-      // alpha: z, beta: x', gamma: y'' (intrinsic Z-X'-Y'')
-      const z = alpha * Math.PI/180;
-      const x = beta * Math.PI/180;
-      const y = gamma * Math.PI/180;
-      const qz = qFromAxisAngle(0,0,1,z);
-      const qx = qFromAxisAngle(1,0,0,x);
-      const qy = qFromAxisAngle(0,1,0,y);
-      return qNormalize(qMul(qz, qMul(qx, qy)));
-    }
-    function deviceorientationHandler(e){
-      if (e.absolute === true || (e.alpha != null && e.beta != null && e.gamma != null)){
-        const q = eulerToQuat(e.alpha||0, e.beta||0, e.gamma||0);
-        qOrient = q; haveStream = true;
-      }
-    }
-
-    async function startSensors(){
-      stopSensors();
-      setStatus('', 'Motion: starting...');
-      const iosOk = await requestIOSPermissionIfNeeded();
-      if (!iosOk){ setStatus('err', 'Motion: permission denied'); return; }
-      // Prefer Generic Sensor API
-      const okGeneric = startGenericSensor();
-      if (okGeneric){ return; }
-      // Fallback 1: DeviceMotion
-      window.addEventListener('devicemotion', devicemotionHandler, {passive:true});
-      sensorMode = 'devicemotion';
-      // Fallback 2: DeviceOrientation (some devices only expose this)
-      window.addEventListener('deviceorientation', deviceorientationHandler, {passive:true});
-      sensorMode = 'deviceorientation';
-      setStatus('ok', 'Motion: active (fallback)');
-      // If no data arrives in 2s, warn
-      setTimeout(() => {
-        if (!haveStream) setStatus('warn', 'Motion: no data (check Chrome > Site settings > Motion sensors)');
-      }, 2000);
-    }
-
-    // ========= WebGL =========
-    const canvas = document.getElementById('glcanvas');
-    let gl = canvas.getContext('webgl2', {alpha:false, antialias:true});
-    let isWebGL2 = !!gl;
-    if (!gl) { gl = canvas.getContext('webgl', {alpha:false, antialias:true}); isWebGL2 = false; }
-
-    function resizeCanvas(){
-      const dpr = Math.max(1, Math.min(2, devicePixelRatio || 1));
-      const w = Math.floor(innerWidth * dpr), h = Math.floor(innerHeight * dpr);
-      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-      gl.viewport(0, 0, canvas.width, canvas.height);
-    }
-    addEventListener('resize', resizeCanvas); resizeCanvas();
-
-    const vsSrc = `
-      attribute vec3 aPosition;
-      attribute vec2 aUV;
-      uniform mat4 uProj;
-      uniform mat4 uView;
-      uniform mat4 uModel;
-      varying vec2 vUV;
-      void main() {
-        vec4 pos = uModel * vec4(aPosition * vec3(-1.0, 1.0, 1.0), 1.0);
-        gl_Position = uProj * uView * pos;
-        vUV = vec2(1.0 - aUV.x, aUV.y);
-      }`;
-    const fsSrc = `
-      precision mediump float;
-      varying vec2 vUV;
-      uniform sampler2D uTex;
-      void main(){ gl_FragColor = texture2D(uTex, vUV); }`;
-
-    function compileShader(type, src){
-      const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
-      if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)){ console.error(gl.getShaderInfoLog(s)); gl.deleteShader(s); return null; }
-      return s;
-    }
-    function createProgram(vs, fs){
-      const p = gl.createProgram(); gl.attachShader(p, vs); gl.attachShader(p, fs); gl.linkProgram(p);
-      if (!gl.getProgramParameter(p, gl.LINK_STATUS)){ console.error(gl.getProgramInfoLog(p)); return null; }
-      return p;
-    }
-    const prog = createProgram(compileShader(gl.VERTEX_SHADER, vsSrc), compileShader(gl.FRAGMENT_SHADER, fsSrc));
-    gl.useProgram(prog);
-    const loc = {
-      aPosition: gl.getAttribLocation(prog, 'aPosition'),
-      aUV: gl.getAttribLocation(prog, 'aUV'),
-      uProj: gl.getUniformLocation(prog, 'uProj'),
-      uView: gl.getUniformLocation(prog, 'uView'),
-      uModel: gl.getUniformLocation(prog, 'uModel'),
-      uTex: gl.getUniformLocation(prog, 'uTex'),
-    };
-
-    function createSphere(segU=64, segV=64){
-      const verts=[], uvs=[], idx=[];
-      for (let y=0; y<=segV; y++){
-        const v=y/segV; const phi=v*Math.PI;
-        for (let x=0; x<=segU; x++){
-          const u=x/segU; const theta=u*Math.PI*2.0;
-          const sx=Math.sin(phi)*Math.cos(theta), sy=Math.cos(phi), sz=Math.sin(phi)*Math.sin(theta);
-          verts.push(sx,sy,sz); uvs.push(u,v);
-        }
-      }
-      for (let y=0; y<segV; y++){
-        for (let x=0; x<segU; x++){
-          const i=y*(segU+1)+x; const a=i, b=i+segU+1, c=i+1, d=i+segU+2; idx.push(a,b,c, c,b,d);
-        }
-      }
-      // Choose Uint16 on WebGL1
-      const maxIndex = Math.max(...idx);
-      const useUInt = isWebGL2 || maxIndex <= 65535;
-      return { verts:new Float32Array(verts), uvs:new Float32Array(uvs), idx: useUInt ? new Uint16Array(idx) : new Uint32Array(idx), indexType: useUInt ? (isWebGL2 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT) : gl.UNSIGNED_INT };
-    }
-    const sphere = createSphere(64,64);
-
-    const vboPos = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vboPos);
-    gl.bufferData(gl.ARRAY_BUFFER, sphere.verts, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(loc.aPosition); gl.vertexAttribPointer(loc.aPosition, 3, gl.FLOAT, false, 0, 0);
-
-    const vboUV = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, vboUV);
-    gl.bufferData(gl.ARRAY_BUFFER, sphere.uvs, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(loc.aUV); gl.vertexAttribPointer(loc.aUV, 2, gl.FLOAT, false, 0, 0);
-
-    const ibo = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
-    if (!isWebGL2 && !(sphere.idx instanceof Uint16Array)){
-      const ext = gl.getExtension('OES_element_index_uint');
-      if (!ext){
-        const s2 = createSphere(48,48);
-        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, s2.idx, gl.STATIC_DRAW);
-        var indexCount = s2.idx.length; var indexType = gl.UNSIGNED_SHORT;
-      } else {
-        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sphere.idx, gl.STATIC_DRAW);
-        var indexCount = sphere.idx.length; var indexType = gl.UNSIGNED_INT;
-      }
-    } else {
-      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, sphere.idx, gl.STATIC_DRAW);
-      var indexCount = sphere.idx.length; var indexType = (isWebGL2 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT);
-    }
-
-    function mat4Identity(){ return new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]); }
-    function mat4Scale(sx,sy,sz){ const m=mat4Identity(); m[0]=sx; m[5]=sy; m[10]=sz; return m; }
-    const modelMatrix = mat4Scale(5000,5000,5000);
-
-    const tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.uniform1i(loc.uTex, 0);
-
-    function updateVideoTexture(){
-      if (video.readyState >= 2 && !video.paused){
-        try {
-          gl.bindTexture(gl.TEXTURE_2D, tex);
-          gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
-        } catch (e) {
-          try { gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, video); } catch(e2){}
-        }
-      }
-    }
-
-    function perspective(out,fovy,aspect,near,far){
-      const f=1.0/Math.tan(fovy/2), nf=1/(near-far);
-      out[0]=f/aspect; out[1]=0; out[2]=0; out[3]=0;
-      out[4]=0; out[5]=f; out[6]=0; out[7]=0;
-      out[8]=0; out[9]=0; out[10]=(far+near)*nf; out[11]=-1;
-      out[12]=0; out[13]=0; out[14]=2*far*near*nf; out[15]=0; return out;
-    }
-    function viewFromOrientation(qFinal){
-      const q=new Float32Array([-qFinal[0],-qFinal[1],-qFinal[2],qFinal[3]]);
-      return qToMat4(q);
-    }
-
-    const proj = new Float32Array(16);
-    let lastFrameTime = performance.now();
-    function render(now){
-      resizeCanvas();
-      const dt = Math.max(0.0, Math.min(0.05, (now - lastFrameTime)/1000.0)); lastFrameTime = now;
-
-      // Smooth view quaternion to reduce jitter
-      const qYaw = qFromAxisAngle(0,1,0, yawOffset);
-      const qWorld = qMul(qMul(qScreen, qOrient), qYaw);
-      const smooth = 1.0 - Math.exp(-dt * 12.0); // time-constant smoothing (~80ms)
-      qView = qSlerp(qView, qWorld, smooth);
-
-      gl.clearColor(0,0,0,1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-      gl.disable(gl.CULL_FACE); gl.disable(gl.DEPTH_TEST);
-      updateVideoTexture(); gl.useProgram(prog); gl.uniform1i(loc.uTex, 0); gl.uniformMatrix4fv(loc.uModel, false, modelMatrix);
-
-      if (vrActive){
-        const w=canvas.width,h=canvas.height, halfW=(w/2)|0;
-        perspective(proj, Math.PI/2.0, halfW/h, 0.1, 10000.0);
-        const view = viewFromOrientation(qView);
-        gl.viewport(0,0,halfW,h); gl.uniformMatrix4fv(loc.uProj,false,proj); gl.uniformMatrix4fv(loc.uView,false,view); gl.drawElements(gl.TRIANGLES, indexCount, indexType, 0);
-        gl.viewport(halfW,0,halfW,h); gl.uniformMatrix4fv(loc.uProj,false,proj); gl.uniformMatrix4fv(loc.uView,false,view); gl.drawElements(gl.TRIANGLES, indexCount, indexType, 0);
-      } else {
-        perspective(proj, Math.PI/2.0, canvas.width/canvas.height, 0.1, 10000.0);
-        const view = viewFromOrientation(qView);
-        gl.viewport(0,0,canvas.width,canvas.height); gl.uniformMatrix4fv(loc.uProj,false,proj); gl.uniformMatrix4fv(loc.uView,false,view); gl.drawElements(gl.TRIANGLES, indexCount, indexType, 0);
-      }
-      requestAnimationFrame(render);
-    }
-    requestAnimationFrame(render);
-
-    // ========= VR flow =========
     async function enterVR(){
-      await ensureVideoPlays();
-      await goFullscreen(); await lockLandscape(); await requestWakeLock();
-      await startSensors();
-      vrActive = true; setTimeout(() => requestRecenter(), 200);
-      showToast('VR mode'); showUI();
+      // Prefer WebXR; fallback to stereo fullscreen
+      const ok = await enterWebXR();
+      if (!ok) await enterCardboard();
     }
-    vrBtn.addEventListener('click', () => { enterVR().catch(err => { console.error(err); vrActive = false; showToast('Could not enter VR'); }); });
-    recenterBtn.addEventListener('click', () => { requestRecenter(); showToast('Recentered'); showUI(); });
 
-    // Initial hint
-    setStatus('warn', 'Motion: tap Enter VR');
+    // Wire buttons
+    document.getElementById('vrBtn').addEventListener('click', enterVR);
+    recenterBtn.addEventListener('click', recenter);
+
+    // Optional: drag & drop
+    document.addEventListener('dragover', e => { e.preventDefault(); });
+    document.addEventListener('drop', e => {
+      e.preventDefault();
+      const file = e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file && file.type.startsWith('video/')) startVideo(URL.createObjectURL(file));
+    });
+
+    // Prevent pinch-zoom
+    window.addEventListener('touchmove', e => { if (e.touches.length > 1) e.preventDefault(); }, { passive:false });
   })();
   </script>
 </body>
