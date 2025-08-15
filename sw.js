@@ -1,17 +1,22 @@
 // sw.js
-const CACHE = '360-vr-player-cache-v4'; // bump to deploy a fresh version
+const CACHE = '360-vr-player-cache-v5'; // bump to deploy a fresh version
 const APP_SHELL = [
   './',
+  './?source=pwa',            // start_url so the installed app opens offline
   './index.html',
   './manifest.json',
   './icons/icon-192.png',
   './icons/icon-512.png',
+  './icons/maskable-192.png',
+  './icons/maskable-512.png'
 ];
 
 // Install: precache the app shell
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting())
+    caches.open(CACHE)
+      .then((cache) => cache.addAll(APP_SHELL))
+      .then(() => self.skipWaiting())
   );
 });
 
@@ -50,14 +55,17 @@ self.addEventListener('fetch', (event) => {
         return fresh;
       } catch {
         const cache = await caches.open(CACHE);
-        return (await cache.match('./')) || (await cache.match('/index.html')) || Response.error();
+        return (await cache.match('./')) ||
+               (await cache.match('./index.html')) ||
+               (await cache.match('/index.html')) ||
+               Response.error();
       }
     })());
     return;
   }
 
   // 2) Don’t intercept byte-range/media or blob/filesystem (video playback, local files)
-  if (req.headers.has('range') || url.protocol === 'blob:' || url.protocol === 'filesystem:') {
+  if (req.headers.has('range') || url.protocol === 'blob:' || url.protocol === 'filesystem:')) {
     return; // let browser handle it directly
   }
 
