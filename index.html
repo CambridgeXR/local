@@ -6,10 +6,9 @@
   <meta name="theme-color" content="#0b0f19" />
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="apple-touch-icon" href="./icons/icon-192.png?v=9">
-  <title>XR Viewer</title>
-  <!-- cache-busted manifest -->
-  <link rel="manifest" href="./manifest.json?v=9" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png?v=10">
+  <title>VR Offline</title>
+  <link rel="manifest" href="./manifest.json?v=10" />
   <style>
     :root { --bg:#0b0f19; --fg:#e5e7eb; --muted:#9aa3b2; }
     html,body {
@@ -17,15 +16,16 @@
       font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, sans-serif;
       overscroll-behavior: none;
     }
-    #app { position:fixed; inset:0; overflow:hidden; }
+    #app { position:fixed; inset:0; overflow:hidden; z-index:0; }
     canvas { display:block; width:100%; height:100%; }
 
     /* Tapzone sits UNDER the UI */
     #tapzone { position:fixed; inset:0; background:transparent; z-index:1; }
 
     /* UI sits ABOVE the tapzone and accepts pointer events */
-    .ui { position:fixed; inset:0; display:grid; place-items:center; z-index:2; }
+    .ui { position:fixed; inset:0; display:grid; place-items:center; z-index:10; pointer-events:auto; }
     .ui-inner { display:flex; flex-direction:column; gap:.75rem; align-items:center; }
+    h1.appTitle { margin:0 0 .25rem; font-size:1.2rem; font-weight:700; letter-spacing:.2px; }
     button {
       appearance:none; border:0; padding:.9rem 1.1rem; border-radius:1rem;
       background:#121a2b; color:var(--fg); font-weight:600; letter-spacing:.2px;
@@ -40,7 +40,7 @@
     .visible { opacity:1; transform: translateY(0); }
     .fade { transition: opacity .25s ease, transform .25s ease; }
 
-    /* File input: not display:none; invisible & non-interactive */
+    /* File input: not display:none; invisible & non-interactive, but programmatically opened */
     #file { position:fixed; width:1px; height:1px; opacity:0; pointer-events:none; }
   </style>
 </head>
@@ -51,6 +51,7 @@
   <!-- Minimal UI -->
   <div class="ui">
     <div id="ui" class="ui-inner fade visible">
+      <h1 class="appTitle">VR Offline</h1>
       <button id="selectBtn" type="button">Select simulation</button>
       <button id="vrBtn" type="button" disabled>Enter VR</button>
       <button id="recenterBtn" type="button">Recenter</button>
@@ -191,18 +192,16 @@
     const installBtn = document.getElementById('installBtn');
     const fileInput = document.getElementById('file');
 
-    // Prevent button taps from toggling the UI underneath
+    // Ensure button taps don’t toggle the backdrop
     ['click','pointerdown','touchstart'].forEach(evt => {
-      selectBtn.addEventListener(evt, e => e.stopPropagation());
-      vrBtn.addEventListener(evt, e => e.stopPropagation());
-      recenterBtn.addEventListener(evt, e => e.stopPropagation());
-      installBtn.addEventListener(evt, e => e.stopPropagation());
+      for (const el of [selectBtn, vrBtn, recenterBtn, installBtn]) {
+        el.addEventListener(evt, e => { e.stopPropagation(); e.preventDefault(); }, { passive:false });
+      }
     });
 
-    // Robust file open
+    // File open (Android-friendly)
     selectBtn.addEventListener('click', () => {
-      // Allow re-selecting the same file
-      fileInput.value = '';
+      fileInput.value = ''; // allow re-selecting the same file
       if (fileInput.showPicker) { try { fileInput.showPicker(); return; } catch(e){} }
       fileInput.click();
     });
@@ -215,7 +214,10 @@
     function startVideo(src){
       video.src = src;
       video.muted = false;
-      video.play().then(() => { vrBtn.disabled = false; }).catch(() => {
+      video.play().then(() => {
+        vrBtn.disabled = false;
+      }).catch(() => {
+        // Autoplay with audio might be blocked; try muted then unmute after interaction
         video.muted = true;
         video.play().then(() => { vrBtn.disabled = false; }).catch(()=>{});
       });
@@ -256,7 +258,7 @@
       e.preventDefault();
       deferredPrompt = e;
       installBtn.style.display = 'block';
-      // auto-prompt on next user interaction
+      // Auto prompt on next user interaction (required by Chrome)
       const auto = () => {
         if (deferredPrompt && !autoPrompted) {
           autoPrompted = true;
@@ -264,13 +266,14 @@
           deferredPrompt.userChoice.finally(() => {
             deferredPrompt = null;
             installBtn.style.display = 'none';
-            window.removeEventListener('pointerdown', auto, { capture:true });
           });
         }
+        window.removeEventListener('pointerdown', auto, { capture:true });
       };
       window.addEventListener('pointerdown', auto, { once:true, capture:true });
       if (ui.classList.contains('hidden')) showUI();
     });
+
     installBtn.addEventListener('click', async () => {
       if (!deferredPrompt) return;
       deferredPrompt.prompt();
@@ -279,6 +282,7 @@
         installBtn.style.display = 'none';
       }
     });
+
     window.addEventListener('appinstalled', () => { installBtn.style.display = 'none'; });
 
     // DnD + gesture
@@ -297,7 +301,7 @@
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', async () => {
       try {
-        const reg = await navigator.serviceWorker.register('./sw.js?v=9', { scope: './' });
+        const reg = await navigator.serviceWorker.register('./sw.js?v=10', { scope: './' });
         if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
         navigator.serviceWorker.addEventListener('controllerchange', () => {
           if (!window.__reloaded) { window.__reloaded = true; location.reload(); }
