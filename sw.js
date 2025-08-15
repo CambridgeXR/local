@@ -1,5 +1,5 @@
 // sw.js
-const VERSION = '12'; // bump this for each deploy
+const VERSION = '13'; // bump this for each deploy
 const CACHE = `vr-offline-cache-v${VERSION}`;
 
 // Precache the app shell (versioned)
