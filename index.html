@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#0b0f19" />
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <link rel="apple-touch-icon" href="./icons/icon-192.png?v=12">
+  <link rel="apple-touch-icon" href="./icons/icon-192.png?v=13">
   <title>VR Offline</title>
-  <link rel="manifest" href="./manifest.json?v=12" />
+  <link rel="manifest" href="./manifest.json?v=13" />
   <style>
     :root { --bg:#0b0f19; --fg:#e5e7eb; --muted:#9aa3b2; }
     html,body {
@@ -19,14 +19,8 @@
     #app { position:fixed; inset:0; overflow:hidden; z-index:0; }
     canvas { display:block; width:100%; height:100%; }
 
-    /* Tapzone sits OVER the canvas and UNDER the buttons */
-    #tapzone {
-      position:fixed; inset:0; background:transparent;
-      z-index: 900; pointer-events:auto;
-    }
-
-    /* UI sits ABOVE the tapzone and accepts pointer events */
-    .ui { position:fixed; inset:0; display:grid; place-items:center; z-index:1000; pointer-events:auto; }
+    /* UI sits above canvas and accepts pointer events */
+    .ui { position:fixed; inset:0; display:grid; place-items:center; z-index:10; pointer-events:auto; }
     .ui-inner { display:flex; flex-direction:column; gap:.8rem; align-items:center; }
 
     h1.appTitle {
@@ -51,15 +45,12 @@
     .visible { opacity:1; transform: translateY(0); }
     .fade { transition: opacity .25s ease, transform .25s ease; }
 
-    /* File input: not display:none; invisible so showPicker()/click() works on Android */
+    /* File input: invisible (not display:none) for programmatic open on Android */
     #file { position:fixed; width:1px; height:1px; opacity:0; pointer-events:none; }
   </style>
 </head>
 <body>
   <div id="app"></div>
-
-  <!-- Fullscreen tap layer to toggle controls -->
-  <div id="tapzone" aria-label="toggle controls"></div>
 
   <!-- Minimal UI -->
   <div class="ui">
@@ -190,9 +181,8 @@
     }
     window.addEventListener('resize', onResize);
 
-    // UI show/hide (robust)
+    // UI show/hide (bulletproof): show on ANY tap outside buttons
     const ui = document.getElementById('ui');
-    const tapzone = document.getElementById('tapzone');
     let uiTimer = null;
 
     function showUI(){
@@ -206,14 +196,17 @@
       ui.classList.add('hidden');
     }
 
-    // Use both pointerdown and click to maximize compatibility
-    function toggleUI(){
-      if (ui.classList.contains('hidden')) showUI(); else hideUI();
-      if (video.src && video.paused) video.play().catch(()=>{});
+    // Global capture listener ensures we get the event before canvas/others
+    function globalTapHandler(e){
+      // If tap was NOT on a UI control, just show the UI
+      const onUI = e.target.closest('#ui');
+      if (!onUI) {
+        showUI();
+        if (video.src && video.paused) video.play().catch(()=>{});
+      }
     }
-    tapzone.addEventListener('pointerdown', toggleUI, { passive:true });
-    tapzone.addEventListener('click', toggleUI, { passive:true });
-
+    document.addEventListener('pointerdown', globalTapHandler, { capture:true, passive:true });
+    document.addEventListener('click',       globalTapHandler, { capture:true, passive:true });
     // Start hidden after a short delay
     uiTimer = setTimeout(hideUI, 3000);
 
@@ -224,7 +217,7 @@
     const installBtn  = document.getElementById('installBtn');
     const fileInput   = document.getElementById('file');
 
-    // Stop bubbling so a button press doesn't also toggle the backdrop
+    // Stop bubbling so a button press doesn't trigger the global handler twice
     ['pointerdown','click','touchstart'].forEach(evt => {
       for (const el of [selectBtn, vrBtn, recenterBtn, installBtn]) {
         el.addEventListener(evt, e => e.stopPropagation(), { passive:true });
@@ -233,7 +226,8 @@
 
     // Select simulation: open file picker and enable VR when playing
     selectBtn.addEventListener('click', () => {
-      fileInput.value = '';
+      showUI(); // keep controls visible after action
+      fileInput.value = ''; // allow re-select same file
       if (fileInput.showPicker) { try { fileInput.showPicker(); return; } catch(e){} }
       fileInput.click();
     });
@@ -275,13 +269,14 @@
       } catch (e) { return false; }
     }
     async function enterVR(){
+      showUI();
       const ok = await enterWebXR();
       if (!ok) await enterCardboard();
     }
     vrBtn.addEventListener('click', enterVR);
 
     // Recenter
-    recenterBtn.addEventListener('click', recenter);
+    recenterBtn.addEventListener('click', () => { showUI(); recenter(); });
 
     // PWA install: show + auto-prompt on next tap after eligibility
     let deferredPrompt = null;
@@ -303,10 +298,11 @@
         window.removeEventListener('pointerdown', auto, { capture:true });
       };
       window.addEventListener('pointerdown', auto, { once:true, capture:true });
-      if (ui.classList.contains('hidden')) showUI();
+      showUI();
     });
 
     installBtn.addEventListener('click', async () => {
+      showUI();
       if (!deferredPrompt) return;
       deferredPrompt.prompt();
       try { await deferredPrompt.userChoice; } finally {
@@ -332,7 +328,7 @@
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', async () => {
       try {
-        const reg = await navigator.serviceWorker.register('./sw.js?v=12', { scope: './' });
+        const reg = await navigator.serviceWorker.register('./sw.js?v=13', { scope: './' });
         if (reg.waiting) reg.waiting.postMessage('SKIP_WAITING');
         navigator.serviceWorker.addEventListener('controllerchange', () => {
           if (!window.__reloaded) { window.__reloaded = true; location.reload(); }
