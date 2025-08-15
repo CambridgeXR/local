@@ -1,5 +1,5 @@
 // sw.js
-const VERSION = '8'; // bump this for each deploy
+const VERSION = '9'; // bump this for each deploy
 const CACHE = `360-vr-player-cache-v${VERSION}`;
 
 const APP_SHELL = [
