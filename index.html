@@ -129,43 +129,88 @@
     const SMOOTH_ALPHA = 0.12;
     const smoothedQuat = new THREE.Quaternion().copy(camera.quaternion);
 
+    
+    // --- Recenter helpers ---
+    const FWD = new THREE.Vector3(0, 0, -1);
+    const Y_AXIS = new THREE.Vector3(0, 1, 0);
+    function getYawFromQuaternion(q){
+      const dir = FWD.clone().applyQuaternion(q);
+      dir.y = 0;
+      if (dir.lengthSq() < 1e-12) return 0;
+      dir.normalize();
+      // heading angle where 0 faces scene -Z
+      return Math.atan2(dir.x, -dir.z);
+    }
+    function yawQuat(angle){
+      return new THREE.Quaternion().setFromAxisAngle(Y_AXIS, angle);
+    }
+
     function recenter(){
       if (mode === 'webxr') {
-        const xrCam = renderer.xr.getCamera();
-        const euler = new THREE.Euler().setFromQuaternion(xrCam.quaternion, 'YXZ');
-        sphere.rotation.y = -euler.y;
+        try {
+          const xr = renderer.xr;
+          const cam = xr.getCamera();
+          // Use the camera's WORLD matrix to get the actual facing in XR
+          const camWorldQuat = new THREE.Quaternion().setFromRotationMatrix(cam.matrixWorld);
+          const yaw = getYawFromQuaternion(camWorldQuat);
+          const refSpace = xr.getReferenceSpace && xr.getReferenceSpace();
+          // If we can, shift the reference space by the inverse of current yaw
+          if (refSpace && typeof refSpace.getOffsetReferenceSpace === 'function') {
+            const half = -yaw / 2;
+            const offset = refSpace.getOffsetReferenceSpace(
+              new XRRigidTransform(
+                undefined,
+                { x: 0, y: Math.sin(half), z: 0, w: Math.cos(half) }
+              )
+            );
+            if (xr.setReferenceSpace) xr.setReferenceSpace(offset);
+          } else {
+            // Fallback: rotate the sphere (visual recenter)
+            sphere.rotation.y += yaw;
+          }
+        } catch (e) {
+          // Ultimate fallback
+          try {
+            const y = getYawFromQuaternion(renderer.xr.getCamera().quaternion);
+            sphere.rotation.y += y;
+          } catch {}
+        }
       } else {
+        // Mono/Stereo (Cardboard): store yaw to cancel each frame
+        yawOffset = getYawFromQuaternion(camera.quaternion);
+      }
+    }
+else {
         const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
         yawOffset = euler.y;
       }
     }
 
+    
     function renderMono(){
       if (controls) controls.update();
-      const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
-      euler.y -= yawOffset;
-      const targetQuat = new THREE.Quaternion().setFromEuler(euler);
+      // Apply yaw correction in quaternion space
+      const targetQuat = camera.quaternion.clone();
+      if (yawOffset) targetQuat.premultiply(yawQuat(-yawOffset));
       smoothedQuat.slerp(targetQuat, SMOOTH_ALPHA);
       camera.quaternion.copy(smoothedQuat);
-      renderer.setScissorTest(false);
-      renderer.render(scene, camera);
+
+      renderer.setScissorTest(false); renderer.render(scene, camera);
     }
 
+
+    
     function renderStereo(){
       if (controls) controls.update();
-      const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
-      euler.y -= yawOffset;
-      const targetQuat = new THREE.Quaternion().setFromEuler(euler);
+      // Apply yaw correction in quaternion space
+      const targetQuat = camera.quaternion.clone();
+      if (yawOffset) targetQuat.premultiply(yawQuat(-yawOffset));
       smoothedQuat.slerp(targetQuat, SMOOTH_ALPHA);
       camera.quaternion.copy(smoothedQuat);
-      const w = renderer.domElement.width, h = renderer.domElement.height;
-      renderer.setScissorTest(true);
-      renderer.setViewport(0, 0, w/2, h);   renderer.setScissor(0, 0, w/2, h);   renderer.render(scene, camera);
-      renderer.setViewport(w/2, 0, w/2, h); renderer.setScissor(w/2, 0, w/2, h); renderer.render(scene, camera);
-      renderer.setScissorTest(false);
-    }
 
-    const xrLoop = () => { renderer.render(scene, camera); };
+      const w = renderer.domElement.width, h = renderer.domElement.height; renderer.setScissorTest(true); renderer.setViewport(0,0,w/2,h); renderer.setScissor(0,0,w/2,h); renderer.render(scene,camera); renderer.setViewport(w/2,0,w/2,h); renderer.setScissor(w/2,0,w/2,h); renderer.render(scene,camera); renderer.setScissorTest(false);
+    }
+;
 
     function animate(){
       if (mode === 'webxr') return;
