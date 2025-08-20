@@ -1,3 +1,4 @@
+const CACHE_NAME = 'vr360-cache-v14';
 // sw.js
 const VERSION = '13'; // bump this for each deploy
 const CACHE = `vr-offline-cache-v${VERSION}`;
